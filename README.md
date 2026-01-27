@@ -118,36 +118,9 @@ After building, reload the extension in Chrome to see changes.
 - Keep data sets under 100 rows for better performance
 - Organize tests into suites by feature/module
 
-## Troubleshooting
-
-**Element not found?**
-- Use the visual picker to select elements
-- Add a wait step before the action
-- Check DevTools console for errors
-
-**Test failing randomly?**
-- Add wait steps after page navigation
-- Increase wait duration for slow-loading pages
-- Use "Wait for Element" instead of fixed delays
-
-**Content script issues?**
-- The extension auto-injects scripts
-- Try reloading the page manually if needed
-
 **Debug:**
 - Open DevTools (F12)
 - Check Console for `[QAerx]` messages
-
-## Roadmap
-
-- [ ] API testing
-- [ ] Visual regression testing
-- [ ] Screenshot on failure
-- [ ] Video recording
-- [ ] Test result reports
-- [ ] CI/CD integration
-- [ ] Cloud sync
-- [ ] Performance metrics
 
 ## Contributing
 
@@ -156,16 +129,3 @@ After building, reload the extension in Chrome to see changes.
 3. Commit changes: `git commit -m 'Add feature'`
 4. Push: `git push origin feature-name`
 5. Open Pull Request
-
-## License
-
-MIT License - see LICENSE file
-
-## Support
-
-- Issues: [GitHub Issues](https://github.com/yourusername/qaerx/issues)
-- Discussions: [GitHub Discussions](https://github.com/yourusername/qaerx/discussions)
-
----
-
-Built with Claude • Inspired by Selenium, Cypress, and Playwright
