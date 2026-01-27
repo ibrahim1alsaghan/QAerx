@@ -1,0 +1,138 @@
+import type { UIStep } from '@/types/test';
+
+interface RecordingState {
+  isRecording: boolean;
+  sessionId: string | null;
+  tabId: number | null;
+  steps: UIStep[];
+}
+
+const recordingState: RecordingState = {
+  isRecording: false,
+  sessionId: null,
+  tabId: null,
+  steps: [],
+};
+
+// Handle messages from content scripts and UI
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  switch (message.type) {
+    case 'content-script:ready':
+      console.log('[QAerx] Content script ready in tab:', sender.tab?.id);
+      sendResponse({ success: true });
+      break;
+
+    case 'recording:started':
+      recordingState.isRecording = true;
+      recordingState.sessionId = message.sessionId;
+      recordingState.tabId = sender.tab?.id || null;
+      recordingState.steps = [];
+      notifyUI({ type: 'recording:state-changed', state: recordingState });
+      sendResponse({ success: true });
+      break;
+
+    case 'recording:stopped':
+      recordingState.isRecording = false;
+      recordingState.steps = message.steps || [];
+      notifyUI({
+        type: 'recording:completed',
+        sessionId: message.sessionId,
+        steps: message.steps,
+      });
+      sendResponse({ success: true });
+      break;
+
+    case 'recording:step-added':
+      recordingState.steps.push(message.step);
+      notifyUI({ type: 'recording:step-added', step: message.step });
+      sendResponse({ success: true });
+      break;
+
+    case 'recording:paused':
+    case 'recording:resumed':
+      notifyUI({ type: message.type });
+      sendResponse({ success: true });
+      break;
+
+    // Commands from UI
+    case 'command:start-recording':
+      startRecording(message.tabId).then(sendResponse);
+      return true;
+
+    case 'command:stop-recording':
+      stopRecording().then(sendResponse);
+      return true;
+
+    case 'command:get-state':
+      sendResponse({ state: recordingState });
+      break;
+
+    default:
+      sendResponse({ error: 'Unknown message type' });
+  }
+
+  return true;
+});
+
+async function startRecording(tabId?: number): Promise<{ success: boolean; error?: string }> {
+  try {
+    const targetTabId = tabId || (await getActiveTabId());
+    if (!targetTabId) {
+      return { success: false, error: 'No active tab found' };
+    }
+
+    const sessionId = crypto.randomUUID();
+
+    // Send message to content script to start recording
+    await chrome.tabs.sendMessage(targetTabId, {
+      type: 'recording:start',
+      sessionId,
+    });
+
+    return { success: true };
+  } catch (error) {
+    console.error('[QAerx] Failed to start recording:', error);
+    return { success: false, error: String(error) };
+  }
+}
+
+async function stopRecording(): Promise<{ success: boolean; steps?: UIStep[]; error?: string }> {
+  try {
+    if (!recordingState.tabId) {
+      return { success: false, error: 'No recording in progress' };
+    }
+
+    const response = await chrome.tabs.sendMessage(recordingState.tabId, {
+      type: 'recording:stop',
+    });
+
+    return { success: true, steps: response.steps };
+  } catch (error) {
+    console.error('[QAerx] Failed to stop recording:', error);
+    return { success: false, error: String(error) };
+  }
+}
+
+async function getActiveTabId(): Promise<number | undefined> {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  return tab?.id;
+}
+
+function notifyUI(message: unknown): void {
+  // Send to all extension pages (popup, side panel)
+  chrome.runtime.sendMessage(message).catch(() => {
+    // Ignore errors if no listeners
+  });
+}
+
+// Open side panel when extension icon is clicked
+chrome.action.onClicked.addListener((tab) => {
+  if (tab.id) {
+    chrome.sidePanel.open({ tabId: tab.id });
+  }
+});
+
+// Enable side panel
+chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+
+console.log('[QAerx] Background service worker initialized');
