@@ -11,13 +11,20 @@ import {
   GripVertical,
   ChevronDown,
   ChevronRight,
+  Loader2,
+  CheckCircle,
+  XCircle,
 } from 'lucide-react';
 import type { UIStep, UIAction, SelectorStrategy } from '@/types/test';
 import { clsx } from 'clsx';
+import { SelectorInput } from './SelectorInput';
+import { SelectorTips } from './SelectorTips';
 
 interface StepEditorProps {
   steps: UIStep[];
   onStepsChange: (steps: UIStep[]) => void;
+  currentStepId?: string | null;
+  stepResults?: Array<{ stepId: string; status: 'passed' | 'failed'; error?: string; duration?: number }>;
 }
 
 type StepType = 'navigate' | 'click' | 'type' | 'select' | 'assert' | 'wait';
@@ -31,9 +38,13 @@ const STEP_TYPES: { type: StepType; label: string; icon: typeof MousePointer; de
   { type: 'wait', label: 'Wait', icon: Clock, description: 'Wait for element or time' },
 ];
 
-export function StepEditor({ steps, onStepsChange }: StepEditorProps) {
+export function StepEditor({ steps, onStepsChange, currentStepId, stepResults }: StepEditorProps) {
   const [expandedStep, setExpandedStep] = useState<string | null>(null);
   const [showAddMenu, setShowAddMenu] = useState(false);
+
+  const getStepResult = (stepId: string) => {
+    return stepResults?.find((r) => r.stepId === stepId);
+  };
 
   const addStep = (type: StepType) => {
     const newStep = createStep(type, steps.length);
@@ -67,6 +78,7 @@ export function StepEditor({ steps, onStepsChange }: StepEditorProps) {
 
   return (
     <div className="space-y-3">
+      <SelectorTips />
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-medium text-dark-300">
           Steps ({steps.length})
@@ -114,6 +126,8 @@ export function StepEditor({ steps, onStepsChange }: StepEditorProps) {
               step={step}
               index={index}
               isExpanded={expandedStep === step.id}
+              isCurrent={currentStepId === step.id}
+              result={getStepResult(step.id)}
               onToggle={() => setExpandedStep(expandedStep === step.id ? null : step.id)}
               onUpdate={(updates) => updateStep(step.id, updates)}
               onDelete={() => deleteStep(step.id)}
@@ -132,6 +146,8 @@ interface StepItemProps {
   step: UIStep;
   index: number;
   isExpanded: boolean;
+  isCurrent?: boolean;
+  result?: { status: 'passed' | 'failed'; error?: string; duration?: number };
   onToggle: () => void;
   onUpdate: (updates: Partial<UIStep>) => void;
   onDelete: () => void;
@@ -144,6 +160,8 @@ function StepItem({
   step,
   index,
   isExpanded,
+  isCurrent,
+  result,
   onToggle,
   onUpdate,
   onDelete,
@@ -175,18 +193,50 @@ function StepItem({
     onUpdate({ action: { ...step.action, ...actionUpdates } as UIAction });
   };
 
-  const updateSelector = (selector: string) => {
-    const newSelectors: SelectorStrategy[] = [
-      { type: 'css', value: selector, priority: 0, confidence: 1 },
-    ];
-    onUpdate({ selectors: newSelectors });
+  const updateSelector = (selector: string, allSelectors?: SelectorStrategy[]) => {
+    if (allSelectors) {
+      // From element picker - use all suggestions
+      onUpdate({ selectors: allSelectors });
+    } else {
+      // Manual input - keep existing suggestions if they exist
+      const existingSelectors = step.selectors.length > 1 ? step.selectors : [];
+      const newSelectors: SelectorStrategy[] = [
+        { type: 'css', value: selector, priority: 0, confidence: 1 },
+        ...existingSelectors.slice(1),
+      ];
+      onUpdate({ selectors: newSelectors });
+    }
+  };
+
+  const getBorderColor = () => {
+    if (isCurrent) return 'border-blue-400 shadow-lg shadow-blue-400/20';
+    if (result?.status === 'passed') return 'border-green-400';
+    if (result?.status === 'failed') return 'border-red-400';
+    if (isExpanded) return 'border-accent';
+    return 'border-dark-700';
+  };
+
+  const getBackgroundColor = () => {
+    if (isCurrent) return 'bg-blue-400/5';
+    if (result?.status === 'passed') return 'bg-green-400/5';
+    if (result?.status === 'failed') return 'bg-red-400/5';
+    if (isExpanded) return 'bg-dark-850';
+    return 'bg-dark-800';
+  };
+
+  const getStatusIcon = () => {
+    if (isCurrent) return <Loader2 className="w-4 h-4 text-blue-400 animate-spin" />;
+    if (result?.status === 'passed') return <CheckCircle className="w-4 h-4 text-green-400" />;
+    if (result?.status === 'failed') return <XCircle className="w-4 h-4 text-red-400" />;
+    return null;
   };
 
   return (
     <div
       className={clsx(
-        'border rounded-lg transition-colors',
-        isExpanded ? 'border-accent bg-dark-850' : 'border-dark-700 bg-dark-800'
+        'border rounded-lg transition-all duration-200',
+        getBorderColor(),
+        getBackgroundColor()
       )}
     >
       <div
@@ -194,19 +244,51 @@ function StepItem({
         onClick={onToggle}
       >
         <GripVertical className="w-4 h-4 text-dark-600 cursor-grab" />
-        <span className="w-6 h-6 flex items-center justify-center bg-dark-700 rounded text-xs text-dark-400">
+        <span className={clsx(
+          "w-6 h-6 flex items-center justify-center rounded text-xs",
+          isCurrent ? "bg-blue-400/20 text-blue-400" :
+          result?.status === 'passed' ? "bg-green-400/20 text-green-400" :
+          result?.status === 'failed' ? "bg-red-400/20 text-red-400" :
+          "bg-dark-700 text-dark-400"
+        )}>
           {index + 1}
         </span>
-        <Icon className="w-4 h-4 text-accent" />
-        <span className="flex-1 text-sm text-dark-200 truncate">
+        <Icon className={clsx(
+          "w-4 h-4",
+          isCurrent ? "text-blue-400" :
+          result?.status === 'passed' ? "text-green-400" :
+          result?.status === 'failed' ? "text-red-400" :
+          "text-accent"
+        )} />
+        <span className={clsx(
+          "flex-1 text-sm truncate",
+          isCurrent ? "text-blue-300 font-medium" :
+          result?.status === 'passed' ? "text-green-300" :
+          result?.status === 'failed' ? "text-red-300" :
+          "text-dark-200"
+        )}>
           {step.name}
         </span>
+        {getStatusIcon()}
+        {result?.duration && (
+          <span className="text-xs text-dark-500">
+            {result.duration}ms
+          </span>
+        )}
         {isExpanded ? (
           <ChevronDown className="w-4 h-4 text-dark-500" />
         ) : (
           <ChevronRight className="w-4 h-4 text-dark-500" />
         )}
       </div>
+
+      {result?.error && !isExpanded && (
+        <div className="px-3 pb-2">
+          <div className="text-xs text-red-400 bg-red-400/10 rounded px-2 py-1">
+            {result.error}
+          </div>
+        </div>
+      )}
 
       {isExpanded && (
         <div className="px-3 pb-3 space-y-3 border-t border-dark-700 pt-3">
@@ -238,14 +320,15 @@ function StepItem({
           {['click', 'type', 'select', 'waitForElement'].includes(step.action.type) && (
             <div>
               <label className="block text-xs text-dark-400 mb-1">
-                Element Selector <span className="text-dark-600">(CSS selector)</span>
+                Element Selector <span className="text-dark-600">(CSS selector, or use Pick button)</span>
               </label>
-              <input
-                type="text"
+              <SelectorInput
                 value={step.selectors[0]?.value || ''}
-                onChange={(e) => updateSelector(e.target.value)}
-                placeholder="#email, .btn-submit, [data-testid='login']"
-                className="input font-mono text-sm"
+                onChange={updateSelector}
+                suggestions={step.selectors}
+                onSuggestionsRequest={() => {
+                  // Suggestions are already in step.selectors from element picker
+                }}
               />
             </div>
           )}
@@ -277,6 +360,96 @@ function StepItem({
                 placeholder="{{option}}"
                 className="input"
               />
+            </div>
+          )}
+
+          {(step.action.type === 'waitTime' || step.action.type === 'waitForElement') && (
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs text-dark-400 mb-2">Wait Type</label>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => updateAction({ type: 'waitTime', duration: 2000 } as Partial<UIAction>)}
+                    className={clsx(
+                      'flex-1 px-3 py-2 rounded-lg text-sm transition-colors',
+                      step.action.type === 'waitTime'
+                        ? 'bg-accent text-white'
+                        : 'bg-dark-700 text-dark-300 hover:bg-dark-600'
+                    )}
+                  >
+                    Wait for Time
+                  </button>
+                  <button
+                    onClick={() => {
+                      updateAction({ type: 'waitForElement' } as Partial<UIAction>);
+                      if (step.selectors.length === 0) {
+                        onUpdate({ selectors: [{ type: 'css', value: '', priority: 0, confidence: 1 }] });
+                      }
+                    }}
+                    className={clsx(
+                      'flex-1 px-3 py-2 rounded-lg text-sm transition-colors',
+                      step.action.type === 'waitForElement'
+                        ? 'bg-accent text-white'
+                        : 'bg-dark-700 text-dark-300 hover:bg-dark-600'
+                    )}
+                  >
+                    Wait for Element
+                  </button>
+                </div>
+              </div>
+
+              {step.action.type === 'waitTime' && (
+                <div>
+                  <label className="block text-xs text-dark-400 mb-1">
+                    Duration (milliseconds)
+                  </label>
+                  <input
+                    type="number"
+                    value={(step.action as { duration?: number }).duration || 2000}
+                    onChange={(e) => updateAction({ duration: parseInt(e.target.value) || 2000 } as Partial<UIAction>)}
+                    placeholder="2000"
+                    min="100"
+                    step="100"
+                    className="input"
+                  />
+                  <p className="text-xs text-dark-500 mt-1">
+                    {((step.action as { duration?: number }).duration || 2000) / 1000} seconds
+                  </p>
+                </div>
+              )}
+
+              {step.action.type === 'waitForElement' && (
+                <div>
+                  <label className="block text-xs text-dark-400 mb-1">
+                    Element Selector <span className="text-dark-600">(CSS selector, or use Pick button)</span>
+                  </label>
+                  <SelectorInput
+                    value={step.selectors[0]?.value || ''}
+                    onChange={updateSelector}
+                    suggestions={step.selectors}
+                    onSuggestionsRequest={() => {
+                      // Suggestions are already in step.selectors from element picker
+                    }}
+                  />
+                </div>
+              )}
+            </div>
+          )}
+
+          {result?.error && (
+            <div className="bg-red-400/10 border border-red-400/20 rounded-lg p-3 mb-3">
+              <div className="flex items-start gap-2">
+                <XCircle className="w-4 h-4 text-red-400 flex-shrink-0 mt-0.5" />
+                <div>
+                  <div className="text-sm font-medium text-red-300 mb-1">Step Failed</div>
+                  <div className="text-xs text-red-200">{result.error}</div>
+                  {result.duration && (
+                    <div className="text-xs text-red-400/60 mt-1">
+                      Failed after {result.duration}ms
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
           )}
 
@@ -364,10 +537,9 @@ function createStep(type: StepType, order: number): UIStep {
     case 'wait':
       return {
         ...baseStep,
-        name: 'Wait for element',
-        action: { type: 'waitForElement' },
-        selectors: [{ type: 'css', value: '', priority: 0, confidence: 1 }],
-        waitConfig: { strategy: 'visible', timeout: 30000 },
+        name: 'Wait',
+        action: { type: 'waitTime', duration: 2000 },
+        selectors: [],
       };
     default:
       return {

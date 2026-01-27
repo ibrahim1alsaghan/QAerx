@@ -83,6 +83,7 @@ export type UIAction =
   | { type: 'goBack' }
   | { type: 'goForward' }
   | { type: 'waitForElement' }
+  | { type: 'waitTime'; duration: number }
   | { type: 'screenshot'; fullPage?: boolean }
   | { type: 'press'; key: string; modifiers?: string[] };
 

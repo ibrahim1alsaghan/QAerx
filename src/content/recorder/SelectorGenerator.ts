@@ -48,13 +48,46 @@ export class SelectorGenerator {
       });
     }
 
-    // 4. ID (if stable-looking)
+    // 4. ID (if stable-looking) - HIGHEST PRIORITY FOR FORMS
     if (element.id && this.isStableId(element.id)) {
       strategies.push({
         type: 'css',
         value: `#${CSS.escape(element.id)}`,
         priority: priority++,
-        confidence: 0.85,
+        confidence: 0.95, // Increased confidence for stable IDs
+      });
+    }
+
+    // 4.5. Name attribute (very useful for forms)
+    const name = element.getAttribute('name');
+    if (name && this.isStableName(name)) {
+      strategies.push({
+        type: 'css',
+        value: `[name="${CSS.escape(name)}"]`,
+        priority: priority++,
+        confidence: 0.9,
+      });
+    }
+
+    // 4.6. Type + Name combination (best for inputs)
+    const type = element.getAttribute('type');
+    if (type && name && this.isStableName(name)) {
+      strategies.push({
+        type: 'css',
+        value: `input[type="${type}"][name="${CSS.escape(name)}"]`,
+        priority: priority++,
+        confidence: 0.92,
+      });
+    }
+
+    // 4.7. Placeholder (useful for inputs without IDs)
+    const placeholder = element.getAttribute('placeholder');
+    if (placeholder && placeholder.length < 50) {
+      strategies.push({
+        type: 'css',
+        value: `[placeholder="${CSS.escape(placeholder)}"]`,
+        priority: priority++,
+        confidence: 0.75,
       });
     }
 
@@ -104,6 +137,15 @@ export class SelectorGenerator {
       /^headlessui-/, // Headless UI auto-generated
     ];
     return !unstablePatterns.some((p) => p.test(id));
+  }
+
+  private isStableName(name: string): boolean {
+    // Names are generally stable if they're meaningful
+    const unstablePatterns = [
+      /^[a-f0-9]{8,}$/i, // Hash-like
+      /^\d+$/, // Pure numbers
+    ];
+    return name.length > 0 && !unstablePatterns.some((p) => p.test(name));
   }
 
   private generateSemanticCSS(element: Element): string | null {

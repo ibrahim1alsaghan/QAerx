@@ -119,6 +119,10 @@ export class PlaybackEngine {
           await this.waitForElement(step.selectors, timeout);
           break;
 
+        case 'waitTime':
+          await this.waitTime((action as { duration: number }).duration);
+          break;
+
         case 'scroll':
           await this.scroll((action as { x?: number; y?: number }).x || 0, (action as { x?: number; y?: number }).y || 0);
           break;
@@ -313,6 +317,10 @@ export class PlaybackEngine {
 
   private async waitForElement(selectors: SelectorStrategy[], timeout: number): Promise<void> {
     await this.findElement(selectors, timeout);
+  }
+
+  private async waitTime(duration: number): Promise<void> {
+    await this.sleep(duration);
   }
 
   private async scroll(x: number, y: number): Promise<void> {
