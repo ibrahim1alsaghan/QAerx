@@ -29,7 +29,8 @@ export function SuiteList({ selectedSuiteId, onSelectSuite }: SuiteListProps) {
       setIsCreating(false);
       toast.success('Suite created');
     } catch (error) {
-      toast.error('Failed to create suite');
+      console.error('Suite creation error:', error);
+      toast.error('Failed to create suite: ' + (error instanceof Error ? error.message : 'Unknown error'));
     }
   };
 

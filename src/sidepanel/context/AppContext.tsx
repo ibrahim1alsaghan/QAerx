@@ -40,17 +40,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const init = async () => {
-      setIsLoading(true);
-      await Promise.all([refreshSuites(), refreshTests(), refreshSettings()]);
+      try {
+        console.log('AppContext init starting...');
+        setIsLoading(true);
+        await Promise.all([refreshSuites(), refreshTests(), refreshSettings()]);
+        console.log('Initial data loaded');
 
-      // Create default suite if none exist
-      const allSuites = await SuiteRepository.getAll();
-      if (allSuites.length === 0) {
-        await SuiteRepository.createDefault();
-        await refreshSuites();
+        // Create default suite if none exist
+        const allSuites = await SuiteRepository.getAll();
+        console.log('All suites:', allSuites);
+        if (allSuites.length === 0) {
+          console.log('Creating default suite...');
+          await SuiteRepository.createDefault();
+          await refreshSuites();
+        }
+
+        setIsLoading(false);
+        console.log('AppContext init complete');
+      } catch (error) {
+        console.error('AppContext init error:', error);
+        setIsLoading(false);
       }
-
-      setIsLoading(false);
     };
 
     init();

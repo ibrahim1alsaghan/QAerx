@@ -22,6 +22,16 @@ export class QAerxDatabase extends Dexie {
       screenshots: 'id, testRunId, stepId, timestamp, isBaseline, [testId+isBaseline]',
       settings: 'id',
     });
+
+    // Version 2: Add order index to suites
+    this.version(2).stores({
+      suites: 'id, parentId, name, order, updatedAt',
+      tests: 'id, suiteId, name, updatedAt, [suiteId+order]',
+      testRuns: 'id, testId, suiteId, status, startedAt, [testId+startedAt]',
+      credentials: 'id, name, domain',
+      screenshots: 'id, testRunId, stepId, timestamp, isBaseline, [testId+isBaseline]',
+      settings: 'id',
+    });
   }
 }
 

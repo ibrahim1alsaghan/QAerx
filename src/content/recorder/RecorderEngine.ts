@@ -2,7 +2,9 @@ import { EventCapture, type CapturedEvent } from './EventCapture';
 import { SelectorGenerator } from './SelectorGenerator';
 import { ActionFilter } from './ActionFilter';
 import type { UIStep, UIAction, SelectorStrategy } from '@/types/test';
-import { v4 as uuid } from 'uuid';
+
+// Use native crypto.randomUUID() instead of uuid package to avoid external imports
+const uuid = () => crypto.randomUUID();
 
 interface RecordingSession {
   id: string;

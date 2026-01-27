@@ -74,11 +74,73 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return true;
 });
 
+function isRestrictedUrl(url: string): boolean {
+  const restrictedPrefixes = [
+    'chrome://',
+    'chrome-extension://',
+    'edge://',
+    'about:',
+    'data:',
+    'file://',
+    'view-source:',
+  ];
+  return restrictedPrefixes.some((prefix) => url.startsWith(prefix));
+}
+
+async function ensureContentScriptInjected(tabId: number): Promise<{ success: boolean; error?: string }> {
+  try {
+    // Get tab info to check URL
+    const tab = await chrome.tabs.get(tabId);
+    if (!tab.url || isRestrictedUrl(tab.url)) {
+      return { success: false, error: 'Cannot record on this page. Please navigate to a regular web page (http:// or https://).' };
+    }
+
+    // Try to ping the content script
+    try {
+      await chrome.tabs.sendMessage(tabId, { type: 'ping' });
+      console.log('[QAerx] Content script already loaded');
+      return { success: true };
+    } catch {
+      // Content script not loaded, inject it
+      console.log('[QAerx] Injecting content script...');
+    }
+
+    // Inject content script
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ['content.js'],
+    });
+
+    // Wait for script to initialize and retry ping
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      try {
+        await chrome.tabs.sendMessage(tabId, { type: 'ping' });
+        console.log('[QAerx] Content script injected successfully');
+        return { success: true };
+      } catch {
+        console.log(`[QAerx] Ping attempt ${attempt + 1} failed, retrying...`);
+      }
+    }
+
+    return { success: false, error: 'Content script failed to load. Try refreshing the page.' };
+  } catch (error) {
+    console.error('[QAerx] Failed to inject content script:', error);
+    return { success: false, error: 'Failed to access tab. Make sure you are on a regular web page.' };
+  }
+}
+
 async function startRecording(tabId?: number): Promise<{ success: boolean; error?: string }> {
   try {
     const targetTabId = tabId || (await getActiveTabId());
     if (!targetTabId) {
       return { success: false, error: 'No active tab found' };
+    }
+
+    // Ensure content script is loaded
+    const injectionResult = await ensureContentScriptInjected(targetTabId);
+    if (!injectionResult.success) {
+      return { success: false, error: injectionResult.error };
     }
 
     const sessionId = crypto.randomUUID();
@@ -89,10 +151,15 @@ async function startRecording(tabId?: number): Promise<{ success: boolean; error
       sessionId,
     });
 
+    recordingState.tabId = targetTabId;
+    recordingState.isRecording = true;
+    recordingState.sessionId = sessionId;
+    recordingState.steps = [];
+
     return { success: true };
   } catch (error) {
     console.error('[QAerx] Failed to start recording:', error);
-    return { success: false, error: String(error) };
+    return { success: false, error: 'Failed to start recording. Try refreshing the page.' };
   }
 }
 
@@ -102,14 +169,25 @@ async function stopRecording(): Promise<{ success: boolean; steps?: UIStep[]; er
       return { success: false, error: 'No recording in progress' };
     }
 
+    // Ensure content script is still available
+    const injectionResult = await ensureContentScriptInjected(recordingState.tabId);
+    if (!injectionResult.success) {
+      // Return whatever steps we have
+      const steps = recordingState.steps;
+      recordingState.isRecording = false;
+      return { success: true, steps, error: 'Recording stopped but page was reloaded. Some steps may be missing.' };
+    }
+
     const response = await chrome.tabs.sendMessage(recordingState.tabId, {
       type: 'recording:stop',
     });
 
+    recordingState.isRecording = false;
     return { success: true, steps: response.steps };
   } catch (error) {
     console.error('[QAerx] Failed to stop recording:', error);
-    return { success: false, error: String(error) };
+    recordingState.isRecording = false;
+    return { success: true, steps: recordingState.steps, error: 'Recording stopped with errors.' };
   }
 }
 

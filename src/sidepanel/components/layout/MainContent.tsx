@@ -1,6 +1,7 @@
 import type { View } from '../../App';
 import { SuiteList } from '../suites/SuiteList';
 import { TestList } from '../tests/TestList';
+import { TestDetail } from '../tests/TestDetail';
 import { ResultsList } from '../results/ResultsList';
 import { SettingsPanel } from '../settings/SettingsPanel';
 
@@ -19,6 +20,18 @@ export function MainContent({
   onSelectSuite,
   onSelectTest,
 }: MainContentProps) {
+  // Show test detail when a test is selected
+  if (currentView === 'tests' && selectedTestId) {
+    return (
+      <main className="flex-1 overflow-hidden">
+        <TestDetail
+          testId={selectedTestId}
+          onBack={() => onSelectTest(null)}
+        />
+      </main>
+    );
+  }
+
   return (
     <main className="flex-1 overflow-auto p-4">
       {currentView === 'suites' && (

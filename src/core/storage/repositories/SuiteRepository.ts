@@ -9,6 +9,7 @@ export interface SuiteTreeNode extends Suite {
 
 export const SuiteRepository = {
   async create(data: Omit<Suite, 'id' | 'createdAt' | 'updatedAt'>): Promise<Suite> {
+    console.log('SuiteRepository.create called with:', data);
     const now = Date.now();
     const suite: Suite = {
       ...data,
@@ -16,7 +17,10 @@ export const SuiteRepository = {
       createdAt: now,
       updatedAt: now,
     };
+    console.log('Creating suite:', suite);
+    console.log('Database instance:', db);
     await db.suites.add(suite);
+    console.log('Suite added successfully');
     return suite;
   },
 
