@@ -11,23 +11,26 @@
     "lint": "eslint src --ext ts,tsx"
   },
   "dependencies": {
+    "@headlessui/react": "^2.2.0",
+    "clsx": "^2.1.1",
+    "dexie": "^4.0.10",
+    "jspdf": "^4.0.0",
+    "jspdf-autotable": "^5.0.7",
+    "lucide-react": "^0.469.0",
+    "openai": "^6.16.0",
+    "papaparse": "^5.4.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "dexie": "^4.0.10",
-    "uuid": "^10.0.0",
-    "papaparse": "^5.4.1",
-    "@headlessui/react": "^2.2.0",
-    "lucide-react": "^0.469.0",
     "react-hot-toast": "^2.4.1",
-    "clsx": "^2.1.1"
+    "uuid": "^10.0.0"
   },
   "devDependencies": {
     "@crxjs/vite-plugin": "2.0.0-beta.23",
     "@types/chrome": "^0.0.287",
+    "@types/papaparse": "^5.3.15",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
     "@types/uuid": "^10.0.0",
-    "@types/papaparse": "^5.3.15",
     "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.4.20",
     "postcss": "^8.4.49",

@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react';
-import { ArrowLeft, Play, Save, Loader2, CheckCircle, XCircle, Database, ListChecks } from 'lucide-react';
+import { ArrowLeft, Play, Save, Loader2, CheckCircle, XCircle, Database, ListChecks, Sparkles, FileDown } from 'lucide-react';
 import { TestRepository } from '@/core/storage/repositories';
 import { StepEditor } from '../steps/StepEditor';
 import { DataPanel } from '../data/DataPanel';
 import type { Test, UIStep } from '@/types/test';
 import toast from 'react-hot-toast';
 import { clsx } from 'clsx';
+import { AIService } from '@/core/services/AIService';
+import { PDFReportService } from '@/core/services/PDFReportService';
 
 interface TestDetailProps {
   testId: string;
@@ -18,6 +20,7 @@ export function TestDetail({ testId, onBack }: TestDetailProps) {
   const [test, setTest] = useState<Test | null>(null);
   const [steps, setSteps] = useState<UIStep[]>([]);
   const [dataSets, setDataSets] = useState<Record<string, string>[]>([{}]);
+  const [isAIGenerated, setIsAIGenerated] = useState(false);
   const [activeTab, setActiveTab] = useState<TabType>('steps');
   const [isRunning, setIsRunning] = useState(false);
   const [runProgress, setRunProgress] = useState<{
@@ -36,6 +39,7 @@ export function TestDetail({ testId, onBack }: TestDetailProps) {
         setTest(t);
         setSteps(t.steps as UIStep[]);
         setDataSets(t.dataSource?.data as Record<string, string>[] || [{}]);
+        setIsAIGenerated(t.dataSource?.type === 'ai-generated');
       }
     });
   }, [testId]);
@@ -47,7 +51,100 @@ export function TestDetail({ testId, onBack }: TestDetailProps) {
 
   const handleDataSetsChange = (newDataSets: Record<string, string>[]) => {
     setDataSets(newDataSets);
+    setIsAIGenerated(false); // Manual edits = not AI generated
     setHasChanges(true);
+  };
+
+  const handleGenerateWithAI = async () => {
+    try {
+      if (steps.length === 0) {
+        toast.error('Add test steps first before generating data');
+        return;
+      }
+
+      const loadingToast = toast.loading('Generating test data with AI...');
+
+      const aiService = new AIService();
+      await aiService.initialize();
+
+      // Generate 3 data sets by default
+      const count = dataSets.length > 0 ? dataSets.length : 3;
+      const generatedData = await aiService.generateTestData(steps, count);
+
+      setDataSets(generatedData);
+      setIsAIGenerated(true);
+      setHasChanges(true);
+
+      toast.dismiss(loadingToast);
+      toast.success(`Generated ${generatedData.length} data sets with AI ✨`);
+    } catch (error: any) {
+      console.error('AI generation error:', error);
+      toast.error(error.message || 'Failed to generate data with AI');
+    }
+  };
+
+  const handleAIAnalyzePage = async () => {
+    try {
+      const loadingToast = toast.loading('Analyzing page with AI...');
+
+      // Get active tab
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab.id) {
+        throw new Error('No active tab found');
+      }
+
+      // Inject content script if needed
+      try {
+        await chrome.tabs.sendMessage(tab.id, { type: 'ping' });
+      } catch {
+        await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          files: ['content.js'],
+        });
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+
+      // Get page context from content script
+      const response = await chrome.tabs.sendMessage(tab.id, { type: 'analyzer:getPageContext' });
+
+      const aiService = new AIService();
+      await aiService.initialize();
+
+      // Analyze page and get suggested test steps
+      const suggestedSteps = await aiService.analyzePageAndSuggestTests(response.context);
+
+      // Add suggested steps to current test
+      setSteps((prev) => [...prev, ...suggestedSteps]);
+      setHasChanges(true);
+
+      toast.dismiss(loadingToast);
+      toast.success(`AI suggested ${suggestedSteps.length} test steps ✨`);
+    } catch (error: any) {
+      console.error('AI analysis error:', error);
+      toast.error(error.message || 'Failed to analyze page with AI');
+    }
+  };
+
+  const handleDownloadReport = async () => {
+    if (!test || !runProgress) return;
+
+    try {
+      const loadingToast = toast.loading('Generating PDF report...');
+
+      await PDFReportService.generateReport({
+        test,
+        dataSets,
+        results: runProgress.results,
+        startedAt: Date.now() - (runProgress.results.reduce((sum, r) => sum + (r.duration || 0), 0)),
+        completedAt: Date.now(),
+      });
+
+      toast.dismiss(loadingToast);
+      toast.success('PDF report downloaded ✨');
+    } catch (error: any) {
+      console.error('PDF generation error:', error);
+      toast.error(error.message || 'Failed to generate PDF report');
+    }
   };
 
   const handleSave = async () => {
@@ -57,7 +154,7 @@ export function TestDetail({ testId, onBack }: TestDetailProps) {
       await TestRepository.update(testId, {
         steps,
         dataSource: {
-          type: 'manual',
+          type: isAIGenerated ? 'ai-generated' : 'manual',
           data: dataSets,
         },
       });
@@ -324,6 +421,26 @@ export function TestDetail({ testId, onBack }: TestDetailProps) {
           <p className="text-xs text-dark-500 truncate">{test.url}</p>
         </div>
         <div className="flex items-center gap-2">
+          {activeTab === 'steps' && !isRunning && (
+            <button
+              onClick={handleAIAnalyzePage}
+              className="btn btn-sm btn-ghost text-purple-400 hover:bg-purple-400/10"
+              title="AI analyze page and suggest test steps"
+            >
+              <Sparkles className="w-4 h-4" />
+              AI Analyze
+            </button>
+          )}
+          {runProgress && !isRunning && (
+            <button
+              onClick={handleDownloadReport}
+              className="btn btn-sm btn-ghost text-blue-400 hover:bg-blue-400/10"
+              title="Download PDF test report"
+            >
+              <FileDown className="w-4 h-4" />
+              Report
+            </button>
+          )}
           {hasChanges && (
             <button onClick={handleSave} className="btn btn-sm btn-ghost">
               <Save className="w-4 h-4" />
@@ -418,6 +535,7 @@ export function TestDetail({ testId, onBack }: TestDetailProps) {
           <DataPanel
             dataSets={dataSets}
             onDataSetsChange={handleDataSetsChange}
+            onGenerateWithAI={handleGenerateWithAI}
           />
         )}
       </div>

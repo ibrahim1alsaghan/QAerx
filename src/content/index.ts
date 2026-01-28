@@ -2,6 +2,7 @@ import { getRecorder } from './recorder/RecorderEngine';
 import { getPlayback } from './playback/PlaybackEngine';
 import { getElementPicker } from './picker/ElementPicker';
 import { getElementHighlighter } from './highlighter/ElementHighlighter';
+import { getSimplifiedPageContext } from './helpers/PageAnalyzer';
 
 // Initialize engines
 const recorder = getRecorder();
@@ -121,6 +122,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     case 'element:clear-highlight':
       highlighter.clear();
       sendResponse({ success: true });
+      return false;
+
+    // Page analyzer
+    case 'analyzer:getPageContext':
+      try {
+        const context = getSimplifiedPageContext();
+        sendResponse({ success: true, context });
+      } catch (error) {
+        sendResponse({ success: false, error: String(error) });
+      }
       return false;
 
     default:
