@@ -2,7 +2,7 @@ import { getRecorder } from './recorder/RecorderEngine';
 import { getPlayback } from './playback/PlaybackEngine';
 import { getElementPicker } from './picker/ElementPicker';
 import { getElementHighlighter } from './highlighter/ElementHighlighter';
-import { getSimplifiedPageContext } from './helpers/PageAnalyzer';
+import { getSimplifiedPageContext, analyzeCurrentPage } from './helpers/PageAnalyzer';
 
 // Initialize engines
 const recorder = getRecorder();
@@ -129,6 +129,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       try {
         const context = getSimplifiedPageContext();
         sendResponse({ success: true, context });
+      } catch (error) {
+        sendResponse({ success: false, error: String(error) });
+      }
+      return false;
+
+    case 'analyzer:getFullAnalysis':
+      try {
+        const analysis = analyzeCurrentPage();
+        sendResponse({ success: true, analysis });
       } catch (error) {
         sendResponse({ success: false, error: String(error) });
       }

@@ -6,6 +6,7 @@ export interface StepResult {
   duration: number;
   error?: string;
   screenshot?: string;
+  pageResponse?: string; // Captured page feedback (success/error messages)
 }
 
 export interface PlaybackResult {
@@ -83,8 +84,9 @@ export class PlaybackEngine {
     timeout: number,
     variables: Record<string, string>
   ): Promise<StepResult> {
+    const action = this.substituteVariables(step.action, variables);
+
     try {
-      const action = this.substituteVariables(step.action, variables);
 
       switch (action.type) {
         case 'navigate':
@@ -131,14 +133,183 @@ export class PlaybackEngine {
           throw new Error(`Unknown action type: ${action.type}`);
       }
 
-      return { stepId: step.id, status: 'passed', duration: 0 };
+      // Wait a bit for page to update after action
+      await this.sleep(500);
+
+      // Capture page response/feedback
+      const pageResponse = this.capturePageResponse(action.type);
+
+      // If page shows an error message, mark step as failed
+      if (pageResponse && pageResponse.startsWith('Error:')) {
+        return {
+          stepId: step.id,
+          status: 'failed',
+          duration: 0,
+          error: pageResponse.replace('Error: ', ''),
+          pageResponse,
+        };
+      }
+
+      return { stepId: step.id, status: 'passed', duration: 0, pageResponse };
     } catch (error) {
+      // Try to capture any error message on page
+      const pageResponse = this.capturePageResponse(action.type, true);
+
       return {
         stepId: step.id,
         status: 'failed',
         duration: 0,
         error: error instanceof Error ? error.message : String(error),
+        pageResponse,
       };
+    }
+  }
+
+  /**
+   * Capture page response/feedback after an action
+   * Looks for success messages, error alerts, toasts, etc.
+   */
+  private capturePageResponse(actionType: string, isError = false): string | undefined {
+    try {
+      // Common error message selectors - expanded list
+      const errorSelectors = [
+        // Generic error classes
+        '.error', '.error-message', '.alert-error', '.alert-danger', '.alert-warning',
+        '[role="alert"]', '.toast-error', '.notification-error',
+        '.invalid-feedback', '.form-error', '.validation-error', '.field-error',
+        '.text-red-500', '.text-red-600', '.text-danger', '.text-error',
+        '[class*="error"]', '[class*="invalid"]', '[class*="danger"]',
+        // Framework-specific
+        '.MuiAlert-standardError', '.ant-alert-error', '.chakra-alert--error',
+        '.Toastify__toast--error', '.swal2-error',
+        // Form validation
+        '.help-block', '.error-text', '.error-msg', '.errormsg',
+        // Snackbar/toast messages
+        '.snackbar-error', '.notification.error', '.message-error',
+      ];
+
+      // Common success message selectors - expanded list
+      const successSelectors = [
+        '.success', '.success-message', '.alert-success',
+        '.toast-success', '.notification-success',
+        '.text-green-500', '.text-green-600', '.text-success',
+        '[class*="success"]',
+        // Framework-specific
+        '.MuiAlert-standardSuccess', '.ant-alert-success', '.chakra-alert--success',
+        '.Toastify__toast--success', '.swal2-success',
+        // Snackbar/toast messages
+        '.snackbar-success', '.notification.success', '.message-success',
+      ];
+
+      // Error keywords to detect
+      const errorKeywords = [
+        'invalid', 'error', 'failed', 'incorrect', 'wrong', 'not found',
+        'denied', 'unauthorized', 'forbidden', 'required', 'missing',
+        'unable', 'cannot', 'couldn\'t', 'can\'t', 'problem',
+        'please try', 'try again', 'not valid', 'does not match',
+        'already exists', 'not exist', 'expired', 'timeout',
+      ];
+
+      // Success keywords to detect
+      const successKeywords = [
+        'success', 'logged in', 'welcome', 'created', 'saved', 'completed',
+        'submitted', 'updated', 'deleted', 'confirmed', 'verified',
+        'thank you', 'thanks', 'done', 'successful', 'approved',
+      ];
+
+      // Check for error messages first
+      for (const selector of errorSelectors) {
+        try {
+          const elements = document.querySelectorAll(selector);
+          for (const el of elements) {
+            const text = el.textContent?.trim();
+            if (text && text.length > 2 && text.length < 300 && this.isElementVisible(el)) {
+              const lowerText = text.toLowerCase();
+              // Check if it contains any error keyword
+              if (errorKeywords.some(keyword => lowerText.includes(keyword))) {
+                return `Error: ${text.substring(0, 150)}`;
+              }
+              // Even if no keyword, if it's in an error-classed element, capture it
+              if (selector.includes('error') || selector.includes('danger') || selector.includes('invalid')) {
+                return `Error: ${text.substring(0, 150)}`;
+              }
+            }
+          }
+        } catch { /* ignore */ }
+      }
+
+      // Also scan for any visible text that looks like an error (even without special class)
+      try {
+        const allElements = document.querySelectorAll('p, span, div, li');
+        for (const el of allElements) {
+          const text = el.textContent?.trim();
+          if (text && text.length > 5 && text.length < 150 && this.isElementVisible(el)) {
+            const lowerText = text.toLowerCase();
+            // Strong error indicators
+            if ((lowerText.includes('invalid') && (lowerText.includes('password') || lowerText.includes('email') || lowerText.includes('credentials'))) ||
+                (lowerText.includes('incorrect') && (lowerText.includes('password') || lowerText.includes('email'))) ||
+                lowerText.includes('login failed') || lowerText.includes('authentication failed')) {
+              return `Error: ${text}`;
+            }
+          }
+        }
+      } catch { /* ignore */ }
+
+      // Check for success messages
+      if (!isError) {
+        for (const selector of successSelectors) {
+          try {
+            const elements = document.querySelectorAll(selector);
+            for (const el of elements) {
+              const text = el.textContent?.trim();
+              if (text && text.length > 2 && text.length < 300 && this.isElementVisible(el)) {
+                const lowerText = text.toLowerCase();
+                if (successKeywords.some(keyword => lowerText.includes(keyword))) {
+                  return `Success: ${text.substring(0, 150)}`;
+                }
+                // If it's in a success-classed element, capture it
+                if (selector.includes('success')) {
+                  return `Success: ${text.substring(0, 150)}`;
+                }
+              }
+            }
+          } catch { /* ignore */ }
+        }
+      }
+
+      // Check URL change for login/navigation actions
+      if (actionType === 'click') {
+        const path = window.location.pathname;
+        const search = window.location.search.toLowerCase();
+
+        // Detect successful login by URL change
+        if (path.includes('dashboard') || path.includes('home') || path.includes('main') ||
+            path.includes('profile') || path.includes('account') || path.includes('admin')) {
+          return 'Success: Redirected to dashboard';
+        }
+        // Detect error in URL
+        if (path.includes('error') || search.includes('error') || search.includes('failed')) {
+          return 'Error: Redirected to error page';
+        }
+        // Still on login page with error params
+        if ((path.includes('login') || path.includes('signin')) &&
+            (search.includes('error') || search.includes('failed') || search.includes('invalid'))) {
+          return 'Error: Login failed - redirected back to login';
+        }
+      }
+
+      // Check page title for hints
+      const title = document.title.toLowerCase();
+      if (title.includes('error') || title.includes('404') || title.includes('denied') || title.includes('failed')) {
+        return `Error: Page shows "${document.title}"`;
+      }
+      if (title.includes('dashboard') || title.includes('welcome') || title.includes('home') || title.includes('success')) {
+        return `Success: Page shows "${document.title}"`;
+      }
+
+      return undefined;
+    } catch {
+      return undefined;
     }
   }
 

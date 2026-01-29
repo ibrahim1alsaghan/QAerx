@@ -1,15 +1,63 @@
 import { useState } from 'react';
-import { Plus, Trash2, Copy, Upload, Sparkles, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Plus, Trash2, Copy, Upload, Sparkles, ChevronLeft, ChevronRight, Beaker, Target, AlertTriangle, Maximize2 } from 'lucide-react';
+
+export type ScenarioType = 'best-case' | 'worst-case' | 'edge-case' | 'boundary' | 'normal';
 
 interface DataPanelProps {
   dataSets: Record<string, string>[];
   onDataSetsChange: (dataSets: Record<string, string>[]) => void;
   onGenerateWithAI?: () => void;
+  onGenerateScenarioData?: () => void;
+  dataSetScenarios?: ScenarioType[];
 }
 
-export function DataPanel({ dataSets, onDataSetsChange, onGenerateWithAI }: DataPanelProps) {
+export function DataPanel({ dataSets, onDataSetsChange, onGenerateWithAI, onGenerateScenarioData, dataSetScenarios }: DataPanelProps) {
   const [currentSetIndex, setCurrentSetIndex] = useState(0);
   const [newKey, setNewKey] = useState('');
+
+  // Scenario label and styling helpers
+  const getScenarioLabel = (scenario: ScenarioType): string => {
+    const labels: Record<ScenarioType, string> = {
+      'best-case': 'Best Case',
+      'worst-case': 'Worst Case',
+      'edge-case': 'Edge Case',
+      'boundary': 'Boundary',
+      'normal': 'Normal',
+    };
+    return labels[scenario] || scenario;
+  };
+
+  const getScenarioIcon = (scenario: ScenarioType) => {
+    switch (scenario) {
+      case 'best-case':
+        return <Target className="w-3 h-3" />;
+      case 'worst-case':
+        return <AlertTriangle className="w-3 h-3" />;
+      case 'edge-case':
+        return <Beaker className="w-3 h-3" />;
+      case 'boundary':
+        return <Maximize2 className="w-3 h-3" />;
+      default:
+        return null;
+    }
+  };
+
+  const getScenarioColor = (scenario: ScenarioType): string => {
+    switch (scenario) {
+      case 'best-case':
+        return 'bg-green-500/20 text-green-400 border-green-500/30';
+      case 'worst-case':
+        return 'bg-red-500/20 text-red-400 border-red-500/30';
+      case 'edge-case':
+        return 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30';
+      case 'boundary':
+        return 'bg-blue-500/20 text-blue-400 border-blue-500/30';
+      default:
+        return 'bg-dark-700 text-dark-400 border-dark-600';
+    }
+  };
+
+  const currentScenario = dataSetScenarios?.[currentSetIndex];
 
   // Ensure we have at least one data set
   const currentDataSets = dataSets.length > 0 ? dataSets : [{}];
@@ -110,9 +158,15 @@ export function DataPanel({ dataSets, onDataSetsChange, onGenerateWithAI }: Data
             />
           </label>
           {onGenerateWithAI && (
-            <button onClick={onGenerateWithAI} className="btn btn-sm btn-ghost text-accent">
+            <button onClick={onGenerateWithAI} className="btn btn-sm btn-ghost text-accent" title="Generate basic test data">
               <Sparkles className="w-4 h-4" />
-              AI Generate
+              AI
+            </button>
+          )}
+          {onGenerateScenarioData && (
+            <button onClick={onGenerateScenarioData} className="btn btn-sm btn-ghost text-purple-400" title="Generate scenario-based test data (best case, worst case, edge cases)">
+              <Beaker className="w-4 h-4" />
+              Scenarios
             </button>
           )}
         </div>
@@ -127,9 +181,17 @@ export function DataPanel({ dataSets, onDataSetsChange, onGenerateWithAI }: Data
         >
           <ChevronLeft className="w-4 h-4" />
         </button>
-        <span className="text-sm text-dark-300">
-          Data Set {currentSetIndex + 1} of {currentDataSets.length}
-        </span>
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-dark-300">
+            Data Set {currentSetIndex + 1} of {currentDataSets.length}
+          </span>
+          {currentScenario && (
+            <span className={`inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded border ${getScenarioColor(currentScenario)}`}>
+              {getScenarioIcon(currentScenario)}
+              {getScenarioLabel(currentScenario)}
+            </span>
+          )}
+        </div>
         <button
           onClick={() => setCurrentSetIndex(Math.min(currentDataSets.length - 1, currentSetIndex + 1))}
           disabled={currentSetIndex === currentDataSets.length - 1}

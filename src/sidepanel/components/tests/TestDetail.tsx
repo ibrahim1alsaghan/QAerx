@@ -1,13 +1,14 @@
 import { useState, useEffect } from 'react';
-import { ArrowLeft, Play, Save, Loader2, CheckCircle, XCircle, Database, ListChecks, Sparkles, FileDown } from 'lucide-react';
+import { ArrowLeft, Play, Save, Loader2, CheckCircle, XCircle, Database, ListChecks, Sparkles, FileDown, Code, Scan } from 'lucide-react';
 import { TestRepository } from '@/core/storage/repositories';
 import { StepEditor } from '../steps/StepEditor';
 import { DataPanel } from '../data/DataPanel';
+import { ExportModal } from '../export/ExportModal';
 import type { Test, UIStep } from '@/types/test';
 import toast from 'react-hot-toast';
 import { clsx } from 'clsx';
 import { AIService } from '@/core/services/AIService';
-import { PDFReportService } from '@/core/services/PDFReportService';
+import { PDFReportService, ScenarioType } from '@/core/services/PDFReportService';
 
 interface TestDetailProps {
   testId: string;
@@ -20,6 +21,7 @@ export function TestDetail({ testId, onBack }: TestDetailProps) {
   const [test, setTest] = useState<Test | null>(null);
   const [steps, setSteps] = useState<UIStep[]>([]);
   const [dataSets, setDataSets] = useState<Record<string, string>[]>([{}]);
+  const [dataSetScenarios, setDataSetScenarios] = useState<ScenarioType[]>([]);
   const [isAIGenerated, setIsAIGenerated] = useState(false);
   const [activeTab, setActiveTab] = useState<TabType>('steps');
   const [isRunning, setIsRunning] = useState(false);
@@ -29,9 +31,11 @@ export function TestDetail({ testId, onBack }: TestDetailProps) {
     currentDataSet: number;
     totalDataSets: number;
     currentStepId: string | null;
-    results: Array<{ dataSetIndex: number; stepId: string; status: 'passed' | 'failed'; error?: string; duration?: number }>;
+    results: Array<{ dataSetIndex: number; stepId: string; status: 'passed' | 'failed'; error?: string; duration?: number; pageResponse?: string }>;
   } | null>(null);
   const [hasChanges, setHasChanges] = useState(false);
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
 
   useEffect(() => {
     TestRepository.getById(testId).then((t) => {
@@ -51,6 +55,7 @@ export function TestDetail({ testId, onBack }: TestDetailProps) {
 
   const handleDataSetsChange = (newDataSets: Record<string, string>[]) => {
     setDataSets(newDataSets);
+    setDataSetScenarios([]); // Clear scenarios on manual edit
     setIsAIGenerated(false); // Manual edits = not AI generated
     setHasChanges(true);
   };
@@ -83,8 +88,42 @@ export function TestDetail({ testId, onBack }: TestDetailProps) {
     }
   };
 
+  const handleGenerateScenarioData = async () => {
+    try {
+      if (steps.length === 0) {
+        toast.error('Add test steps first before generating data');
+        return;
+      }
+
+      const loadingToast = toast.loading('Generating scenario-based test data with AI...');
+
+      const aiService = new AIService();
+      await aiService.initialize();
+
+      // Generate scenario-based data sets (best case, worst case, edge case, boundary)
+      const result = await aiService.generateScenarioTestData(steps, {
+        bestCase: 1,
+        worstCase: 2,
+        edgeCase: 1,
+        boundary: 1,
+      });
+
+      setDataSets(result.dataSets);
+      setDataSetScenarios(result.scenarios);
+      setIsAIGenerated(true);
+      setHasChanges(true);
+
+      toast.dismiss(loadingToast);
+      toast.success(`Generated ${result.dataSets.length} scenario data sets (Best/Worst/Edge/Boundary) ✨`);
+    } catch (error: any) {
+      console.error('AI scenario generation error:', error);
+      toast.error(error.message || 'Failed to generate scenario data with AI');
+    }
+  };
+
   const handleAIAnalyzePage = async () => {
     try {
+      setIsAnalyzing(true);
       const loadingToast = toast.loading('Analyzing page with AI...');
 
       // Get active tab
@@ -122,6 +161,142 @@ export function TestDetail({ testId, onBack }: TestDetailProps) {
     } catch (error: any) {
       console.error('AI analysis error:', error);
       toast.error(error.message || 'Failed to analyze page with AI');
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  const handleCollectFields = async () => {
+    try {
+      const loadingToast = toast.loading('Scanning page for form fields...');
+
+      // Get active tab
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab.id) {
+        throw new Error('No active tab found');
+      }
+
+      // Inject content script if needed
+      try {
+        await chrome.tabs.sendMessage(tab.id, { type: 'ping' });
+      } catch {
+        await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          files: ['content.js'],
+        });
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+
+      // Get full page analysis from content script
+      const response = await chrome.tabs.sendMessage(tab.id, { type: 'analyzer:getFullAnalysis' });
+
+      if (!response.success) {
+        throw new Error(response.error || 'Failed to analyze page');
+      }
+
+      const analysis = response.analysis;
+
+      // Create steps from detected fields
+      const newSteps: UIStep[] = [];
+      let order = steps.length;
+
+      // Process all forms
+      analysis.forms.forEach((form: any) => {
+        form.fields.forEach((field: any) => {
+          const fieldName = field.label || field.placeholder || field.name || field.id || 'field';
+          const varName = (field.name || field.id || fieldName).replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
+
+          if (field.type === 'text' || field.type === 'email' || field.type === 'password' || field.type === 'tel' || field.type === 'number' || field.type === 'textarea') {
+            newSteps.push({
+              id: crypto.randomUUID(),
+              type: 'ui',
+              order: order++,
+              name: `Enter ${fieldName}`,
+              enabled: true,
+              continueOnFailure: false,
+              action: { type: 'type', text: `{{${varName}}}` },
+              selectors: [{ type: 'css', value: field.selector, priority: 0, confidence: 0.9 }],
+            });
+          } else if (field.type === 'select' || field.type === 'select-one') {
+            newSteps.push({
+              id: crypto.randomUUID(),
+              type: 'ui',
+              order: order++,
+              name: `Select ${fieldName}`,
+              enabled: true,
+              continueOnFailure: false,
+              action: { type: 'select', value: `{{${varName}}}` },
+              selectors: [{ type: 'css', value: field.selector, priority: 0, confidence: 0.9 }],
+            });
+          } else if (field.type === 'checkbox' || field.type === 'radio') {
+            newSteps.push({
+              id: crypto.randomUUID(),
+              type: 'ui',
+              order: order++,
+              name: `Check ${fieldName}`,
+              enabled: true,
+              continueOnFailure: false,
+              action: { type: 'check' },
+              selectors: [{ type: 'css', value: field.selector, priority: 0, confidence: 0.9 }],
+            });
+          }
+        });
+      });
+
+      // Process standalone inputs
+      analysis.inputs.forEach((input: any) => {
+        const fieldName = input.label || input.placeholder || input.name || input.id || 'field';
+        const varName = (input.name || input.id || fieldName).replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
+
+        if (input.type === 'text' || input.type === 'email' || input.type === 'password' || input.type === 'tel' || input.type === 'number' || input.type === 'textarea') {
+          newSteps.push({
+            id: crypto.randomUUID(),
+            type: 'ui',
+            order: order++,
+            name: `Enter ${fieldName}`,
+            enabled: true,
+            continueOnFailure: false,
+            action: { type: 'type', text: `{{${varName}}}` },
+            selectors: [{ type: 'css', value: input.selector, priority: 0, confidence: 0.9 }],
+          });
+        }
+      });
+
+      // Add submit button if found
+      const submitButton = analysis.buttons.find((btn: any) =>
+        btn.type === 'submit' ||
+        btn.text.toLowerCase().includes('submit') ||
+        btn.text.toLowerCase().includes('save') ||
+        btn.text.toLowerCase().includes('create')
+      );
+
+      if (submitButton) {
+        newSteps.push({
+          id: crypto.randomUUID(),
+          type: 'ui',
+          order: order++,
+          name: `Click ${submitButton.text}`,
+          enabled: true,
+          continueOnFailure: false,
+          action: { type: 'click' },
+          selectors: [{ type: 'css', value: submitButton.selector, priority: 0, confidence: 0.9 }],
+        });
+      }
+
+      if (newSteps.length === 0) {
+        toast.dismiss(loadingToast);
+        toast.error('No form fields found on this page');
+        return;
+      }
+
+      setSteps((prev) => [...prev, ...newSteps]);
+      setHasChanges(true);
+
+      toast.dismiss(loadingToast);
+      toast.success(`Added ${newSteps.length} steps from ${analysis.forms.length} forms`);
+    } catch (error: any) {
+      console.error('Collect fields error:', error);
+      toast.error(error.message || 'Failed to collect fields');
     }
   };
 
@@ -131,9 +306,16 @@ export function TestDetail({ testId, onBack }: TestDetailProps) {
     try {
       const loadingToast = toast.loading('Generating PDF report...');
 
+      // Create test object with current steps from state (not stale test.steps)
+      const testWithCurrentSteps = {
+        ...test,
+        steps: steps,
+      };
+
       await PDFReportService.generateReport({
-        test,
+        test: testWithCurrentSteps,
         dataSets,
+        dataSetScenarios: dataSetScenarios.length > 0 ? dataSetScenarios : undefined,
         results: runProgress.results,
         startedAt: Date.now() - (runProgress.results.reduce((sum, r) => sum + (r.duration || 0), 0)),
         completedAt: Date.now(),
@@ -158,6 +340,17 @@ export function TestDetail({ testId, onBack }: TestDetailProps) {
           data: dataSets,
         },
       });
+
+      // Update the test state to keep it in sync
+      setTest({
+        ...test,
+        steps,
+        dataSource: {
+          type: isAIGenerated ? 'ai-generated' : 'manual',
+          data: dataSets,
+        },
+      });
+
       setHasChanges(false);
       toast.success('Test saved');
     } catch (error) {
@@ -253,7 +446,7 @@ export function TestDetail({ testId, onBack }: TestDetailProps) {
                   });
 
                   if (response?.result?.stepResults) {
-                    response.result.stepResults.forEach((stepResult: { stepId: string; status: 'passed' | 'failed'; error?: string; duration?: number }) => {
+                    response.result.stepResults.forEach((stepResult: { stepId: string; status: 'passed' | 'failed'; error?: string; duration?: number; pageResponse?: string }) => {
                       setRunProgress((prev) => {
                         if (!prev) return null;
                         return {
@@ -369,7 +562,7 @@ export function TestDetail({ testId, onBack }: TestDetailProps) {
               });
 
               if (response?.result?.stepResults) {
-                response.result.stepResults.forEach((stepResult: { stepId: string; status: 'passed' | 'failed'; error?: string; duration?: number }) => {
+                response.result.stepResults.forEach((stepResult: { stepId: string; status: 'passed' | 'failed'; error?: string; duration?: number; pageResponse?: string }) => {
                   setRunProgress((prev) => {
                     if (!prev) return null;
                     return {
@@ -422,13 +615,34 @@ export function TestDetail({ testId, onBack }: TestDetailProps) {
         </div>
         <div className="flex items-center gap-2">
           {activeTab === 'steps' && !isRunning && (
+            <>
+              <button
+                onClick={handleCollectFields}
+                className="btn btn-sm btn-ghost text-cyan-400 hover:bg-cyan-400/10"
+                title="Scan page and collect all form fields"
+              >
+                <Scan className="w-4 h-4" />
+                Collect Fields
+              </button>
+              <button
+                onClick={handleAIAnalyzePage}
+                disabled={isAnalyzing}
+                className="btn btn-sm btn-ghost text-purple-400 hover:bg-purple-400/10"
+                title="AI analyze page and suggest test steps"
+              >
+                {isAnalyzing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                AI Analyze
+              </button>
+            </>
+          )}
+          {steps.length > 0 && !isRunning && (
             <button
-              onClick={handleAIAnalyzePage}
-              className="btn btn-sm btn-ghost text-purple-400 hover:bg-purple-400/10"
-              title="AI analyze page and suggest test steps"
+              onClick={() => setShowExportModal(true)}
+              className="btn btn-sm btn-ghost text-orange-400 hover:bg-orange-400/10"
+              title="Export test to Playwright, Cypress, or Selenium"
             >
-              <Sparkles className="w-4 h-4" />
-              AI Analyze
+              <Code className="w-4 h-4" />
+              Export
             </button>
           )}
           {runProgress && !isRunning && (
@@ -536,9 +750,19 @@ export function TestDetail({ testId, onBack }: TestDetailProps) {
             dataSets={dataSets}
             onDataSetsChange={handleDataSetsChange}
             onGenerateWithAI={handleGenerateWithAI}
+            onGenerateScenarioData={handleGenerateScenarioData}
+            dataSetScenarios={dataSetScenarios}
           />
         )}
       </div>
+
+      {/* Export Modal */}
+      <ExportModal
+        isOpen={showExportModal}
+        onClose={() => setShowExportModal(false)}
+        test={{ ...test, steps }}
+        dataSets={dataSets}
+      />
     </div>
   );
 }

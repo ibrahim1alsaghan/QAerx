@@ -181,6 +181,125 @@ Example format:
   }
 
   /**
+   * Generate test data with scenarios (best case, worst case, edge cases)
+   */
+  async generateScenarioTestData(
+    steps: UIStep[],
+    options: { bestCase?: number; worstCase?: number; edgeCase?: number; boundary?: number } = {}
+  ): Promise<{ dataSets: Record<string, string>[]; scenarios: ('best-case' | 'worst-case' | 'edge-case' | 'boundary')[] }> {
+    if (!this.client) {
+      throw new Error('AIService not initialized');
+    }
+
+    const { bestCase = 1, worstCase = 2, edgeCase = 1, boundary = 1 } = options;
+    const totalCount = bestCase + worstCase + edgeCase + boundary;
+
+    // Extract variable names from steps
+    let variables = this.extractVariablesFromSteps(steps);
+    if (variables.length === 0) {
+      variables = this.inferFieldsFromSteps(steps);
+      if (variables.length === 0) {
+        throw new Error('Could not find variables in test steps. Use {{variableName}} syntax.');
+      }
+    }
+
+    const stepDescriptions = steps
+      .map((s, i) => {
+        const selectors = s.selectors?.map(sel => sel.value).join(' or ') || 'no selector';
+        return `${i + 1}. ${s.name}: ${this.describeAction(s)} [selector: ${selectors}]`;
+      })
+      .join('\n');
+
+    const systemMessage = `You are a QA test data expert. Generate comprehensive test data covering different scenarios to ensure thorough testing coverage.`;
+
+    const userMessage = `Generate test data sets for these variables: ${variables.join(', ')}
+
+Test context:
+${stepDescriptions}
+
+Generate the following scenarios:
+1. BEST CASE (${bestCase} sets): Valid, correctly formatted data that should pass all validations
+   - Real email formats (user@domain.com)
+   - Strong passwords meeting requirements
+   - Properly formatted names, phones, etc.
+
+2. WORST CASE (${worstCase} sets): Invalid data that should fail validation
+   - Invalid email formats (missing @, invalid domains)
+   - Weak/invalid passwords
+   - Empty required fields
+   - Special characters that might break input
+   - SQL injection attempts (for security testing)
+   - XSS attempts (for security testing)
+
+3. EDGE CASE (${edgeCase} sets): Unusual but potentially valid data
+   - Very long strings (near max length)
+   - Unicode characters, emojis
+   - Leading/trailing spaces
+   - Multiple consecutive spaces
+
+4. BOUNDARY (${boundary} sets): Data at validation boundaries
+   - Minimum length values
+   - Maximum length values
+   - Just under/over limits
+
+Return ONLY valid JSON in this exact format:
+{
+  "dataSets": [
+    {"scenario": "best-case", ${variables.map(v => `"${v}": "value"`).join(', ')}},
+    {"scenario": "worst-case", ${variables.map(v => `"${v}": "value"`).join(', ')}},
+    ...
+  ]
+}`;
+
+    try {
+      const response = await this.makeRequest(async () => {
+        return await this.client!.chat.completions.create({
+          model: 'gpt-4o-mini',
+          messages: [
+            { role: 'system', content: systemMessage },
+            { role: 'user', content: userMessage },
+          ],
+          temperature: 0.8,
+          response_format: { type: 'json_object' },
+        });
+      });
+
+      const content = response.choices[0]?.message?.content;
+      if (!content) {
+        throw new Error('Empty response from AI');
+      }
+
+      const parsed = JSON.parse(content);
+      const rawDataSets = parsed.dataSets || parsed.data || [];
+
+      if (!Array.isArray(rawDataSets) || rawDataSets.length === 0) {
+        throw new Error('AI returned invalid data format');
+      }
+
+      // Separate data and scenarios
+      const dataSets: Record<string, string>[] = [];
+      const scenarios: ('best-case' | 'worst-case' | 'edge-case' | 'boundary')[] = [];
+
+      rawDataSets.forEach((row: any) => {
+        const scenario = row.scenario as 'best-case' | 'worst-case' | 'edge-case' | 'boundary';
+        scenarios.push(scenario || 'normal');
+
+        // Create clean data set without scenario field
+        const cleanData: Record<string, string> = {};
+        variables.forEach(v => {
+          cleanData[v] = row[v] || '';
+        });
+        dataSets.push(cleanData);
+      });
+
+      return { dataSets: dataSets.slice(0, totalCount), scenarios: scenarios.slice(0, totalCount) };
+    } catch (error) {
+      this.handleError(error);
+      throw error;
+    }
+  }
+
+  /**
    * Analyze current page and suggest test cases
    */
   async analyzePageAndSuggestTests(pageContext: string): Promise<UIStep[]> {
