@@ -1,19 +1,36 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { Toaster } from 'react-hot-toast';
 import { Sidebar } from './components/layout/Sidebar';
 import { Header } from './components/layout/Header';
 import { MainContent } from './components/layout/MainContent';
-import { AppProvider } from './context/AppContext';
+import { FloatingRecordButton } from './components/recording/FloatingRecordButton';
+import { AppProvider, useApp } from './context/AppContext';
 
 export type View = 'suites' | 'tests' | 'results' | 'settings';
 
-export default function App() {
+function AppContent() {
   const [currentView, setCurrentView] = useState<View>('suites');
   const [selectedSuiteId, setSelectedSuiteId] = useState<string | null>(null);
   const [selectedTestId, setSelectedTestId] = useState<string | null>(null);
+  const { refreshTests, refreshSuites } = useApp();
+
+  // Handle test creation from FloatingRecordButton
+  const handleTestCreated = useCallback(async (testId: string) => {
+    await refreshSuites();
+    await refreshTests();
+    setCurrentView('tests');
+    setSelectedTestId(testId);
+  }, [refreshTests, refreshSuites]);
+
+  // Handle steps added to existing test
+  const handleStepsAdded = useCallback(async (testId: string) => {
+    await refreshTests();
+    setCurrentView('tests');
+    setSelectedTestId(testId);
+  }, [refreshTests]);
 
   return (
-    <AppProvider>
+    <>
       <div className="flex h-screen bg-dark-900">
         <Sidebar
           currentView={currentView}
@@ -34,6 +51,13 @@ export default function App() {
           />
         </div>
       </div>
+
+      {/* Floating Record Button - Always visible */}
+      <FloatingRecordButton
+        onTestCreated={handleTestCreated}
+        onStepsAdded={handleStepsAdded}
+      />
+
       <Toaster
         position="bottom-right"
         toastOptions={{
@@ -41,6 +65,14 @@ export default function App() {
           duration: 3000,
         }}
       />
+    </>
+  );
+}
+
+export default function App() {
+  return (
+    <AppProvider>
+      <AppContent />
     </AppProvider>
   );
 }

@@ -216,7 +216,17 @@ export class ElementPicker {
     if (type) display += `[type="${type}"]`;
     if (name) display += ` (name="${name}")`;
 
-    return `${display} → ${selector.value}`;
+    // Check for dynamic selector warning
+    const warning = this.selectorGenerator.isDynamicSelector(selector.value);
+    if (warning) {
+      return `⚠️ ${display} → ${selector.value}\n${warning}`;
+    }
+
+    // Show stability indicator
+    const stability = this.selectorGenerator.getSelectorStability(selector);
+    const stabilityIcon = stability >= 0.8 ? '✓' : stability >= 0.5 ? '~' : '⚠️';
+
+    return `${stabilityIcon} ${display} → ${selector.value}`;
   }
 }
 

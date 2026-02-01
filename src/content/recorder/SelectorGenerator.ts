@@ -127,16 +127,102 @@ export class SelectorGenerator {
 
   private isStableId(id: string): boolean {
     const unstablePatterns = [
-      /^[a-f0-9]{8}-[a-f0-9]{4}/i, // UUID
-      /^:r[0-9]+:/, // React auto-generated
-      /^ember\d+$/, // Ember auto-generated
-      /^ng-\d+$/, // Angular auto-generated
+      // UUID patterns
+      /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i,
+      /^[a-f0-9]{8}-[a-f0-9]{4}/i,
+      /^[a-f0-9]{32}$/i, // MD5 hash
+
+      // Framework auto-generated IDs
+      /^:r[0-9]+:?$/, // React 18 useId
+      /^react-[a-z]+-\d+$/i, // React auto-generated
+      /^ember\d+$/, // Ember
+      /^ng-\d+$/, // Angular
+      /^ng_\d+$/, // Angular variant
+      /^mui-\d+$/, // MUI
+      /^headlessui-[a-z]+-\d+$/i, // Headless UI
+      /^radix-[a-z]+-\d+$/i, // Radix UI
+      /^downshift-\d+-/i, // Downshift
+
+      // Frappe framework patterns (critical for this project)
+      /^frappe[-_]ui[-_]\d+$/i, // frappe-ui-5, frappe_ui_5
+      /^frappe[-_]\d+$/i, // frappe-5, frappe_5
+      /^control-\d+-\d+$/i, // Frappe control IDs
+      /^awesomplete[-_]\d+$/i, // Awesomplete (used by Frappe)
+
+      // Select/dropdown libraries
+      /^select2-[a-z]+-[a-z0-9]+$/i, // Select2
+      /^react-select-\d+/i, // React Select
+      /^choices-\d+$/i, // Choices.js
+
+      // Generic dynamic patterns
       /^\d+$/, // Pure numbers
-      /^[a-z]+_[a-f0-9]{6,}$/i, // Common hash patterns
-      /^mui-\d+$/, // MUI auto-generated
-      /^headlessui-/, // Headless UI auto-generated
+      /^_[a-zA-Z0-9]+$/, // Underscore prefix (often generated)
+      /^[a-z]+[-_][a-f0-9]{6,}$/i, // word-hash patterns
+      /^[a-z]+[-_][a-z]+[-_]\d+$/i, // word_word_number patterns (like frappe_ui_5)
+      /^uid[-_]\d+$/i, // uid-123
+      /^id[-_]\d+$/i, // id-123
     ];
     return !unstablePatterns.some((p) => p.test(id));
+  }
+
+  /**
+   * Check if a selector appears to be dynamic/unstable
+   * Returns warning message if dynamic, null if stable
+   */
+  isDynamicSelector(selector: string): string | null {
+    // Check for dynamic ID patterns in the selector
+    const idMatch = selector.match(/#([a-zA-Z0-9_-]+)/);
+    if (idMatch && !this.isStableId(idMatch[1])) {
+      return `Selector uses dynamic ID "${idMatch[1]}" which may change on page refresh`;
+    }
+
+    // Check for nth-child/nth-of-type which are position-dependent
+    if (/nth-(child|of-type)\(\d+\)/.test(selector)) {
+      return 'Selector uses position-based matching which may break if page structure changes';
+    }
+
+    // Check for very long selectors (fragile)
+    if ((selector.match(/ > /g) || []).length > 5) {
+      return 'Selector has deep nesting which may break if page structure changes';
+    }
+
+    return null;
+  }
+
+  /**
+   * Get selector stability rating (0-1)
+   */
+  getSelectorStability(selector: SelectorStrategy): number {
+    // data-testid and data-cy are most stable
+    if (selector.type === 'data-testid' || selector.type === 'data-cy') {
+      return 1.0;
+    }
+
+    // ARIA labels are very stable
+    if (selector.type === 'aria') {
+      return 0.95;
+    }
+
+    // Name attributes are stable for forms
+    if (selector.value.includes('[name=')) {
+      return 0.9;
+    }
+
+    // Stable IDs
+    if (selector.value.startsWith('#')) {
+      const id = selector.value.substring(1).split(/[[\s>]/)[0];
+      if (this.isStableId(id)) {
+        return 0.85;
+      }
+      return 0.3; // Dynamic ID
+    }
+
+    // Check for dynamic patterns in CSS selector
+    if (this.isDynamicSelector(selector.value)) {
+      return 0.2;
+    }
+
+    return selector.confidence;
   }
 
   private isStableName(name: string): boolean {

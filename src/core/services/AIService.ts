@@ -634,6 +634,98 @@ Format:
     }
   }
 
+  /**
+   * Validate step result using AI interpretation
+   * Called by AIValidationService for intelligent pass/fail determination
+   */
+  async validateStepResult(context: {
+    stepName: string;
+    actionType: string;
+    actionDescription: string;
+    pageResponse: string | undefined;
+    urlChange: string;
+    variables: Record<string, string>;
+  }): Promise<{
+    errorDetected: boolean;
+    errorMessage: string | null;
+    successMessage: string | null;
+    confidence: number;
+  }> {
+    if (!this.client) {
+      throw new Error('AIService not initialized');
+    }
+
+    const systemMessage = `You are a QA test validator. Analyze test step execution results to determine success or failure.
+
+Your job is to:
+1. Detect if there was an error message on the page
+2. Identify success indicators (redirects, success messages, confirmations)
+3. Provide confidence level (0-1) in your assessment
+
+Be especially careful to detect:
+- Login/authentication failures ("Invalid credentials", "Wrong password", etc.)
+- Form validation errors ("Required field", "Invalid email", etc.)
+- Permission/access errors ("Unauthorized", "Forbidden", etc.)
+- Server errors ("Error", "Failed", "500", etc.)`;
+
+    const userMessage = `Analyze this test step execution:
+
+STEP: "${context.stepName}"
+ACTION TYPE: ${context.actionType}
+ACTION DETAILS: ${context.actionDescription}
+
+PAGE RESPONSE CAPTURED: "${context.pageResponse || 'No message captured on page'}"
+
+URL CHANGE: ${context.urlChange}
+
+DATA USED IN THIS STEP:
+${JSON.stringify(context.variables, null, 2)}
+
+Based on this information, determine:
+1. Was there an error message displayed on the page?
+2. If successful, what indicates success (redirect, message, etc.)?
+3. How confident are you in this assessment?
+
+Return ONLY valid JSON:
+{
+  "errorDetected": true or false,
+  "errorMessage": "The specific error message if detected, or null",
+  "successMessage": "Success indicator if no error (e.g., 'Redirected to dashboard'), or null",
+  "confidence": 0.0 to 1.0
+}`;
+
+    try {
+      const response = await this.makeRequest(async () => {
+        return await this.client!.chat.completions.create({
+          model: 'gpt-4o-mini',
+          messages: [
+            { role: 'system', content: systemMessage },
+            { role: 'user', content: userMessage },
+          ],
+          temperature: 0.3, // Low temperature for consistent validation
+          response_format: { type: 'json_object' },
+        });
+      });
+
+      const content = response.choices[0]?.message?.content;
+      if (!content) {
+        throw new Error('Empty response from AI');
+      }
+
+      const result = JSON.parse(content);
+
+      return {
+        errorDetected: result.errorDetected ?? false,
+        errorMessage: result.errorMessage ?? null,
+        successMessage: result.successMessage ?? null,
+        confidence: result.confidence ?? 0.5,
+      };
+    } catch (error) {
+      this.handleError(error);
+      throw error;
+    }
+  }
+
   // ==================== HELPER METHODS ====================
 
   /**

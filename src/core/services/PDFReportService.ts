@@ -1,8 +1,16 @@
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import type { Test, UIStep } from '@/types/test';
+import type { Test, UIStep, ScenarioType } from '@/types/test';
+import type { AIValidationData } from '@/types/validation';
+import {
+  loadArabicFonts,
+  registerArabicFonts,
+  containsArabic,
+  prepareArabicText,
+} from './fonts/arabicFont';
 
-export type ScenarioType = 'best-case' | 'worst-case' | 'edge-case' | 'boundary' | 'normal';
+// Re-export for backwards compatibility
+export type { ScenarioType };
 
 interface TestRunData {
   test: Test;
@@ -15,12 +23,16 @@ interface TestRunData {
     error?: string;
     duration?: number;
     pageResponse?: string; // Captured system response (login success/fail, etc.)
+    aiValidation?: AIValidationData; // AI validation details
   }>;
   startedAt: number;
   completedAt: number;
 }
 
 export class PDFReportService {
+  // Track if Arabic fonts are available
+  private static hasArabicFont = false;
+
   /**
    * Generate comprehensive PDF test report
    */
@@ -29,6 +41,18 @@ export class PDFReportService {
     const pageWidth = doc.internal.pageSize.getWidth();
     const pageHeight = doc.internal.pageSize.getHeight();
     const steps = runData.test.steps.filter((s): s is UIStep => s.type === 'ui');
+
+    // Load and register Arabic fonts for proper Unicode support
+    try {
+      const fontsLoaded = await loadArabicFonts();
+      if (fontsLoaded) {
+        this.hasArabicFont = registerArabicFonts(doc);
+        console.log('[PDFReport] Arabic font support:', this.hasArabicFont ? 'enabled' : 'disabled');
+      }
+    } catch (error) {
+      console.warn('[PDFReport] Failed to load Arabic fonts:', error);
+      this.hasArabicFont = false;
+    }
 
     // Calculate totals
     const totalSteps = steps.length;
@@ -94,9 +118,12 @@ export class PDFReportService {
       doc.setFont('helvetica', 'bold');
       doc.setTextColor(75, 85, 99);
       doc.text(label + ':', 20, yPosition);
-      doc.setFont('helvetica', 'normal');
+      // Use Arabic font for values that contain Arabic text
+      const fontName = this.getFontForText(value);
+      doc.setFont(fontName, 'normal');
       doc.setTextColor(17, 24, 39);
-      doc.text(value, 60, yPosition);
+      const displayValue = this.sanitizeForPDF(value);
+      doc.text(displayValue, 60, yPosition);
       yPosition += 7;
     });
 
@@ -262,11 +289,12 @@ export class PDFReportService {
         yPosition = 20;
       }
 
-      // Data set header
+      // Data set header with scenario badge
       if (totalDataSets > 1) {
         const dataSetLabel = `Data Set ${dataSetIdx + 1}`;
         const dataSetStatus = dataSetPassed ? 'PASSED' : 'FAILED';
         const statusColor = dataSetPassed ? [34, 197, 94] : [239, 68, 68];
+        const scenario = runData.dataSetScenarios?.[dataSetIdx];
 
         doc.setFillColor(249, 250, 251);
         doc.roundedRect(20, yPosition - 3, pageWidth - 40, 12, 2, 2, 'F');
@@ -276,6 +304,19 @@ export class PDFReportService {
         doc.setTextColor(59, 130, 246);
         doc.text(dataSetLabel, 25, yPosition + 5);
 
+        // Add scenario badge if present
+        if (scenario) {
+          const scenarioLabel = this.getScenarioLabel(scenario);
+          const scenarioColor = this.getScenarioColor(scenario);
+          doc.setFillColor(scenarioColor[0], scenarioColor[1], scenarioColor[2]);
+          doc.roundedRect(70, yPosition - 1, 25, 8, 2, 2, 'F');
+          doc.setFontSize(7);
+          doc.setTextColor(255, 255, 255);
+          doc.text(scenarioLabel, 82, yPosition + 4, { align: 'center' });
+        }
+
+        doc.setFontSize(11);
+        doc.setFont('helvetica', 'bold');
         doc.setTextColor(statusColor[0], statusColor[1], statusColor[2]);
         doc.text(dataSetStatus, pageWidth - 45, yPosition + 5);
 
@@ -290,10 +331,19 @@ export class PDFReportService {
         const status = result?.status || 'pending';
         const duration = result?.duration ? this.formatDuration(result.duration) : '-';
 
-        // Generate result description - prefer pageResponse if available
+        // Generate result description - prefer AI validation reason
         let resultDescription = '';
-        if (result?.pageResponse) {
-          // Use actual page response (e.g., "Error: Invalid credentials", "Success: Logged in")
+        if (result?.aiValidation) {
+          // Use AI validation reason with confidence indicator
+          const confidence = Math.round(result.aiValidation.confidence * 100);
+          if (result.aiValidation.expectedError) {
+            // Worst-case scenario that correctly rejected invalid data
+            resultDescription = `[OK] ${result.aiValidation.reason}`;
+          } else {
+            resultDescription = `${result.aiValidation.reason} (${confidence}%)`;
+          }
+        } else if (result?.pageResponse) {
+          // Fallback to page response
           resultDescription = result.pageResponse;
         } else if (status === 'passed') {
           resultDescription = this.getSuccessDescription(step, action, currentDataSet);
@@ -545,6 +595,20 @@ export class PDFReportService {
   }
 
   /**
+   * Get color for scenario badge
+   */
+  private static getScenarioColor(scenario: ScenarioType): [number, number, number] {
+    const colors: Record<ScenarioType, [number, number, number]> = {
+      'best-case': [34, 197, 94],    // Green
+      'worst-case': [239, 68, 68],   // Red
+      'edge-case': [234, 179, 8],    // Yellow/Amber
+      'boundary': [59, 130, 246],    // Blue
+      'normal': [107, 114, 128],     // Gray
+    };
+    return colors[scenario] || [107, 114, 128];
+  }
+
+  /**
    * Get human-readable action type
    */
   private static getActionType(type: string): string {
@@ -598,17 +662,21 @@ export class PDFReportService {
 
   /**
    * Sanitize text for PDF - handle non-Latin characters
-   * jsPDF default fonts don't support Arabic/Unicode, so we transliterate or show placeholder
+   * Uses Arabic font when available, otherwise falls back to placeholders
    */
   private static sanitizeForPDF(text: string): string {
     if (!text) return '';
+
+    // If Arabic font is available and text contains Arabic, prepare it for RTL rendering
+    if (this.hasArabicFont && containsArabic(text)) {
+      return prepareArabicText(text);
+    }
 
     // Check if text contains non-ASCII characters
     const hasNonAscii = /[^\x00-\x7F]/.test(text);
 
     if (hasNonAscii) {
-      // Try to extract meaningful parts or use a placeholder
-      // Keep ASCII parts and replace non-ASCII with readable alternatives
+      // Arabic font not available - use placeholders
       return text
         .replace(/[\u0600-\u06FF]+/g, '[Arabic]')  // Arabic
         .replace(/[\u4E00-\u9FFF]+/g, '[Chinese]') // Chinese
@@ -618,6 +686,16 @@ export class PDFReportService {
     }
 
     return text;
+  }
+
+  /**
+   * Get the appropriate font for text content
+   */
+  private static getFontForText(text: string): string {
+    if (this.hasArabicFont && containsArabic(text)) {
+      return 'Amiri';
+    }
+    return 'helvetica';
   }
 
   /**

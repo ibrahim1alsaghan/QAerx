@@ -1,12 +1,20 @@
 import type { UIStep, UIAction, SelectorStrategy } from '@/types/test';
 
+export interface StepExecutionContext {
+  urlBefore: string;
+  urlAfter: string;
+  titleBefore: string;
+  titleAfter: string;
+}
+
 export interface StepResult {
   stepId: string;
-  status: 'passed' | 'failed' | 'skipped';
+  status: 'passed' | 'failed' | 'skipped' | 'pending';  // 'pending' = needs AI validation
   duration: number;
   error?: string;
   screenshot?: string;
   pageResponse?: string; // Captured page feedback (success/error messages)
+  context?: StepExecutionContext; // Rich context for AI validation
 }
 
 export interface PlaybackResult {
@@ -64,6 +72,8 @@ export class PlaybackEngine {
       result.stepResults.push(stepResult);
       onStepComplete?.(step, stepResult);
 
+      // Only stop on execution errors (status='failed'), not on 'pending' status
+      // 'pending' means execution succeeded but needs AI validation to determine pass/fail
       if (stepResult.status === 'failed' && !step.continueOnFailure) {
         result.status = 'failed';
         break;
@@ -86,8 +96,11 @@ export class PlaybackEngine {
   ): Promise<StepResult> {
     const action = this.substituteVariables(step.action, variables);
 
-    try {
+    // Capture state before execution
+    const urlBefore = window.location.href;
+    const titleBefore = document.title;
 
+    try {
       switch (action.type) {
         case 'navigate':
           await this.navigate((action as { url: string }).url, timeout);
@@ -139,28 +152,42 @@ export class PlaybackEngine {
       // Capture page response/feedback
       const pageResponse = this.capturePageResponse(action.type);
 
-      // If page shows an error message, mark step as failed
-      if (pageResponse && pageResponse.startsWith('Error:')) {
-        return {
-          stepId: step.id,
-          status: 'failed',
-          duration: 0,
-          error: pageResponse.replace('Error: ', ''),
-          pageResponse,
-        };
-      }
+      // Capture state after execution
+      const urlAfter = window.location.href;
+      const titleAfter = document.title;
 
-      return { stepId: step.id, status: 'passed', duration: 0, pageResponse };
+      // Return result with 'pending' status - AI validation will determine final pass/fail
+      // This replaces the fragile `pageResponse.startsWith('Error:')` check
+      return {
+        stepId: step.id,
+        status: 'pending',  // Final status determined by AI validation in sidepanel
+        duration: 0,
+        pageResponse,
+        context: {
+          urlBefore,
+          urlAfter,
+          titleBefore,
+          titleAfter,
+        },
+      };
     } catch (error) {
-      // Try to capture any error message on page
+      // Execution error (element not found, timeout, etc.) - this is a definite failure
       const pageResponse = this.capturePageResponse(action.type, true);
+      const urlAfter = window.location.href;
+      const titleAfter = document.title;
 
       return {
         stepId: step.id,
-        status: 'failed',
+        status: 'failed',  // Execution errors are always failures
         duration: 0,
         error: error instanceof Error ? error.message : String(error),
         pageResponse,
+        context: {
+          urlBefore,
+          urlAfter,
+          titleBefore,
+          titleAfter,
+        },
       };
     }
   }

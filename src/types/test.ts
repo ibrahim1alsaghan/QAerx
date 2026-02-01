@@ -1,5 +1,8 @@
 // Suite and Test types
 
+// Scenario types for AI-generated test data
+export type ScenarioType = 'best-case' | 'worst-case' | 'edge-case' | 'boundary' | 'normal';
+
 export interface Suite {
   id: string;
   name: string;
@@ -36,6 +39,7 @@ export interface Test {
 export interface TestDataSource {
   type: 'manual' | 'imported' | 'ai-generated';
   data: Record<string, unknown>[];
+  scenarios?: ScenarioType[];  // Scenario labels for each data set (best-case, worst-case, etc.)
   sourceFile?: string;
 }
 

@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import { Plus, Trash2, Copy, Upload, Sparkles, ChevronLeft, ChevronRight, Beaker, Target, AlertTriangle, Maximize2 } from 'lucide-react';
+import type { ScenarioType } from '@/types/test';
 
-export type ScenarioType = 'best-case' | 'worst-case' | 'edge-case' | 'boundary' | 'normal';
+// Re-export for backwards compatibility
+export type { ScenarioType };
 
 interface DataPanelProps {
   dataSets: Record<string, string>[];

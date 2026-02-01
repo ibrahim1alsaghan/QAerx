@@ -4,11 +4,13 @@ import { TestRepository } from '@/core/storage/repositories';
 import { StepEditor } from '../steps/StepEditor';
 import { DataPanel } from '../data/DataPanel';
 import { ExportModal } from '../export/ExportModal';
-import type { Test, UIStep } from '@/types/test';
+import type { Test, UIStep, ScenarioType } from '@/types/test';
+import type { ValidationContext, AIValidationData } from '@/types/validation';
 import toast from 'react-hot-toast';
 import { clsx } from 'clsx';
 import { AIService } from '@/core/services/AIService';
-import { PDFReportService, ScenarioType } from '@/core/services/PDFReportService';
+import { AIValidationService } from '@/core/services/AIValidationService';
+import { PDFReportService } from '@/core/services/PDFReportService';
 
 interface TestDetailProps {
   testId: string;
@@ -31,7 +33,15 @@ export function TestDetail({ testId, onBack }: TestDetailProps) {
     currentDataSet: number;
     totalDataSets: number;
     currentStepId: string | null;
-    results: Array<{ dataSetIndex: number; stepId: string; status: 'passed' | 'failed'; error?: string; duration?: number; pageResponse?: string }>;
+    results: Array<{
+      dataSetIndex: number;
+      stepId: string;
+      status: 'passed' | 'failed';
+      error?: string;
+      duration?: number;
+      pageResponse?: string;
+      aiValidation?: AIValidationData;
+    }>;
   } | null>(null);
   const [hasChanges, setHasChanges] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
@@ -43,6 +53,11 @@ export function TestDetail({ testId, onBack }: TestDetailProps) {
         setTest(t);
         setSteps(t.steps as UIStep[]);
         setDataSets(t.dataSource?.data as Record<string, string>[] || [{}]);
+        // Restore scenarios from storage
+        const storedScenarios = t.dataSource?.scenarios;
+        if (storedScenarios && Array.isArray(storedScenarios)) {
+          setDataSetScenarios(storedScenarios as ScenarioType[]);
+        }
         setIsAIGenerated(t.dataSource?.type === 'ai-generated');
       }
     });
@@ -200,13 +215,36 @@ export function TestDetail({ testId, onBack }: TestDetailProps) {
       const newSteps: UIStep[] = [];
       let order = steps.length;
 
+      // Track used variable names to avoid collisions
+      const usedVarNames = new Set<string>();
+      const getUniqueVarName = (baseName: string): string => {
+        let sanitized = baseName
+          .replace(/[^a-zA-Z0-9]/g, '_')
+          .replace(/_+/g, '_')
+          .replace(/^_|_$/g, '')
+          .toLowerCase();
+        if (/^\d/.test(sanitized)) sanitized = 'field_' + sanitized;
+        if (!sanitized) sanitized = 'field';
+
+        let finalName = sanitized;
+        let counter = 1;
+        while (usedVarNames.has(finalName)) {
+          finalName = `${sanitized}_${counter}`;
+          counter++;
+        }
+        usedVarNames.add(finalName);
+        return finalName;
+      };
+
       // Process all forms
       analysis.forms.forEach((form: any) => {
         form.fields.forEach((field: any) => {
           const fieldName = field.label || field.placeholder || field.name || field.id || 'field';
-          const varName = (field.name || field.id || fieldName).replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
+          const varName = getUniqueVarName(field.name || field.id || fieldName);
+          // Use confidence from PageAnalyzer, fallback to 0.75 if not provided
+          const confidence = field.confidence ?? 0.75;
 
-          if (field.type === 'text' || field.type === 'email' || field.type === 'password' || field.type === 'tel' || field.type === 'number' || field.type === 'textarea') {
+          if (field.type === 'text' || field.type === 'email' || field.type === 'password' || field.type === 'tel' || field.type === 'number' || field.type === 'textarea' || field.type === 'search' || field.type === 'url') {
             newSteps.push({
               id: crypto.randomUUID(),
               type: 'ui',
@@ -215,9 +253,9 @@ export function TestDetail({ testId, onBack }: TestDetailProps) {
               enabled: true,
               continueOnFailure: false,
               action: { type: 'type', text: `{{${varName}}}` },
-              selectors: [{ type: 'css', value: field.selector, priority: 0, confidence: 0.9 }],
+              selectors: [{ type: 'css', value: field.selector, priority: 0, confidence }],
             });
-          } else if (field.type === 'select' || field.type === 'select-one') {
+          } else if (field.type === 'select' || field.type === 'select-one' || field.type === 'select-multiple') {
             newSteps.push({
               id: crypto.randomUUID(),
               type: 'ui',
@@ -226,7 +264,7 @@ export function TestDetail({ testId, onBack }: TestDetailProps) {
               enabled: true,
               continueOnFailure: false,
               action: { type: 'select', value: `{{${varName}}}` },
-              selectors: [{ type: 'css', value: field.selector, priority: 0, confidence: 0.9 }],
+              selectors: [{ type: 'css', value: field.selector, priority: 0, confidence }],
             });
           } else if (field.type === 'checkbox' || field.type === 'radio') {
             newSteps.push({
@@ -237,7 +275,18 @@ export function TestDetail({ testId, onBack }: TestDetailProps) {
               enabled: true,
               continueOnFailure: false,
               action: { type: 'check' },
-              selectors: [{ type: 'css', value: field.selector, priority: 0, confidence: 0.9 }],
+              selectors: [{ type: 'css', value: field.selector, priority: 0, confidence }],
+            });
+          } else if (field.type === 'date' || field.type === 'datetime-local' || field.type === 'time' || field.type === 'month' || field.type === 'week') {
+            newSteps.push({
+              id: crypto.randomUUID(),
+              type: 'ui',
+              order: order++,
+              name: `Enter ${fieldName}`,
+              enabled: true,
+              continueOnFailure: false,
+              action: { type: 'type', text: `{{${varName}}}` },
+              selectors: [{ type: 'css', value: field.selector, priority: 0, confidence }],
             });
           }
         });
@@ -246,9 +295,10 @@ export function TestDetail({ testId, onBack }: TestDetailProps) {
       // Process standalone inputs
       analysis.inputs.forEach((input: any) => {
         const fieldName = input.label || input.placeholder || input.name || input.id || 'field';
-        const varName = (input.name || input.id || fieldName).replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
+        const varName = getUniqueVarName(input.name || input.id || fieldName);
+        const confidence = input.confidence ?? 0.75;
 
-        if (input.type === 'text' || input.type === 'email' || input.type === 'password' || input.type === 'tel' || input.type === 'number' || input.type === 'textarea') {
+        if (input.type === 'text' || input.type === 'email' || input.type === 'password' || input.type === 'tel' || input.type === 'number' || input.type === 'textarea' || input.type === 'search' || input.type === 'url') {
           newSteps.push({
             id: crypto.randomUUID(),
             type: 'ui',
@@ -257,20 +307,31 @@ export function TestDetail({ testId, onBack }: TestDetailProps) {
             enabled: true,
             continueOnFailure: false,
             action: { type: 'type', text: `{{${varName}}}` },
-            selectors: [{ type: 'css', value: input.selector, priority: 0, confidence: 0.9 }],
+            selectors: [{ type: 'css', value: input.selector, priority: 0, confidence }],
           });
         }
       });
 
-      // Add submit button if found
-      const submitButton = analysis.buttons.find((btn: any) =>
-        btn.type === 'submit' ||
-        btn.text.toLowerCase().includes('submit') ||
-        btn.text.toLowerCase().includes('save') ||
-        btn.text.toLowerCase().includes('create')
+      // Add submit button if found - prefer login/signin buttons for login forms
+      let submitButton = analysis.buttons.find((btn: any) =>
+        btn.text.toLowerCase().includes('login') ||
+        btn.text.toLowerCase().includes('sign in') ||
+        btn.text.toLowerCase().includes('log in')
       );
 
+      if (!submitButton) {
+        submitButton = analysis.buttons.find((btn: any) =>
+          btn.type === 'submit' ||
+          btn.text.toLowerCase().includes('submit') ||
+          btn.text.toLowerCase().includes('save') ||
+          btn.text.toLowerCase().includes('create') ||
+          btn.text.toLowerCase().includes('register') ||
+          btn.text.toLowerCase().includes('sign up')
+        );
+      }
+
       if (submitButton) {
+        const confidence = submitButton.confidence ?? 0.75;
         newSteps.push({
           id: crypto.randomUUID(),
           type: 'ui',
@@ -279,7 +340,7 @@ export function TestDetail({ testId, onBack }: TestDetailProps) {
           enabled: true,
           continueOnFailure: false,
           action: { type: 'click' },
-          selectors: [{ type: 'css', value: submitButton.selector, priority: 0, confidence: 0.9 }],
+          selectors: [{ type: 'css', value: submitButton.selector, priority: 0, confidence }],
         });
       }
 
@@ -293,7 +354,9 @@ export function TestDetail({ testId, onBack }: TestDetailProps) {
       setHasChanges(true);
 
       toast.dismiss(loadingToast);
-      toast.success(`Added ${newSteps.length} steps from ${analysis.forms.length} forms`);
+      const formCount = analysis.forms.length;
+      const inputCount = analysis.inputs.length;
+      toast.success(`Added ${newSteps.length} steps from ${formCount} form${formCount !== 1 ? 's' : ''} and ${inputCount} standalone input${inputCount !== 1 ? 's' : ''}`);
     } catch (error: any) {
       console.error('Collect fields error:', error);
       toast.error(error.message || 'Failed to collect fields');
@@ -338,6 +401,7 @@ export function TestDetail({ testId, onBack }: TestDetailProps) {
         dataSource: {
           type: isAIGenerated ? 'ai-generated' : 'manual',
           data: dataSets,
+          scenarios: dataSetScenarios.length > 0 ? dataSetScenarios : undefined,
         },
       });
 
@@ -348,6 +412,7 @@ export function TestDetail({ testId, onBack }: TestDetailProps) {
         dataSource: {
           type: isAIGenerated ? 'ai-generated' : 'manual',
           data: dataSets,
+          scenarios: dataSetScenarios.length > 0 ? dataSetScenarios : undefined,
         },
       });
 
@@ -373,6 +438,79 @@ export function TestDetail({ testId, onBack }: TestDetailProps) {
       currentStepId: null,
       results: [],
     });
+
+    // Initialize AI validation service
+    const validationService = new AIValidationService();
+    try {
+      await validationService.initialize();
+    } catch (error) {
+      console.warn('AI validation not available, using fallback:', error);
+    }
+
+    // Helper function to validate a step result with AI
+    const validateStepResult = async (
+      stepResult: { stepId: string; status: string; error?: string; pageResponse?: string; context?: any },
+      step: UIStep,
+      dataSetIndex: number,
+      variables: Record<string, string>,
+      previousUrl: string
+    ) => {
+      const scenario = dataSetScenarios[dataSetIndex] || 'normal';
+
+      // If step already failed due to execution error, keep it as failed
+      if (stepResult.status === 'failed' && stepResult.error) {
+        return {
+          dataSetIndex,
+          stepId: stepResult.stepId,
+          status: 'failed' as const,
+          error: stepResult.error,
+          duration: (stepResult as any).duration || 0,
+          pageResponse: stepResult.pageResponse,
+        };
+      }
+
+      // Build validation context
+      const validationContext: ValidationContext = {
+        stepName: step.name,
+        stepIndex: steps.findIndex(s => s.id === step.id),
+        totalSteps: steps.length,
+        actionType: step.action.type,
+        actionDescription: getActionDescription(step),
+        pageResponse: stepResult.pageResponse,
+        urlBefore: previousUrl,
+        urlAfter: stepResult.context?.urlAfter || previousUrl,
+        titleBefore: stepResult.context?.titleBefore || '',
+        titleAfter: stepResult.context?.titleAfter || '',
+        scenario,
+        variables,
+      };
+
+      // Validate with AI
+      const validation = await validationService.validateStep(validationContext);
+
+      return {
+        dataSetIndex,
+        stepId: stepResult.stepId,
+        status: validation.status,
+        error: validation.status === 'failed' ? validation.reason : undefined,
+        duration: (stepResult as any).duration || 0,
+        pageResponse: stepResult.pageResponse,
+        aiValidation: validationService.toAIValidationData(validation),
+      };
+    };
+
+    // Helper to get action description for AI context
+    const getActionDescription = (step: UIStep): string => {
+      const action = step.action as any;
+      switch (action.type) {
+        case 'type': return `Type "${action.text}" into field`;
+        case 'click': return `Click on element`;
+        case 'navigate': return `Navigate to ${action.url}`;
+        case 'select': return `Select option "${action.value}"`;
+        case 'waitTime': return `Wait ${action.duration}ms`;
+        default: return action.type;
+      }
+    };
 
     try {
       // Get active tab
@@ -446,15 +584,26 @@ export function TestDetail({ testId, onBack }: TestDetailProps) {
                   });
 
                   if (response?.result?.stepResults) {
-                    response.result.stepResults.forEach((stepResult: { stepId: string; status: 'passed' | 'failed'; error?: string; duration?: number; pageResponse?: string }) => {
-                      setRunProgress((prev) => {
-                        if (!prev) return null;
-                        return {
-                          ...prev,
-                          results: [...prev.results, { dataSetIndex, ...stepResult }],
-                        };
-                      });
-                    });
+                    // Validate each step result with AI
+                    for (const stepResult of response.result.stepResults) {
+                      const step = currentSteps.find(s => s.id === stepResult.stepId);
+                      if (step) {
+                        const validatedResult = await validateStepResult(
+                          stepResult,
+                          step,
+                          dataSetIndex,
+                          variables,
+                          tab.url || ''
+                        );
+                        setRunProgress((prev) => {
+                          if (!prev) return null;
+                          return {
+                            ...prev,
+                            results: [...prev.results, validatedResult],
+                          };
+                        });
+                      }
+                    }
                   }
                 } catch (error) {
                   console.error('Error executing steps before navigation:', error);
@@ -562,15 +711,26 @@ export function TestDetail({ testId, onBack }: TestDetailProps) {
               });
 
               if (response?.result?.stepResults) {
-                response.result.stepResults.forEach((stepResult: { stepId: string; status: 'passed' | 'failed'; error?: string; duration?: number; pageResponse?: string }) => {
-                  setRunProgress((prev) => {
-                    if (!prev) return null;
-                    return {
-                      ...prev,
-                      results: [...prev.results, { dataSetIndex, ...stepResult }],
-                    };
-                  });
-                });
+                // Validate each step result with AI
+                for (const stepResult of response.result.stepResults) {
+                  const step = currentSteps.find(s => s.id === stepResult.stepId);
+                  if (step) {
+                    const validatedResult = await validateStepResult(
+                      stepResult,
+                      step,
+                      dataSetIndex,
+                      variables,
+                      tab.url || ''
+                    );
+                    setRunProgress((prev) => {
+                      if (!prev) return null;
+                      return {
+                        ...prev,
+                        results: [...prev.results, validatedResult],
+                      };
+                    });
+                  }
+                }
               }
             } catch (error) {
               console.error('Error executing remaining steps:', error);
