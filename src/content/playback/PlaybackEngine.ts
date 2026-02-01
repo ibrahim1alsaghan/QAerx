@@ -1,4 +1,5 @@
 import type { UIStep, UIAction, SelectorStrategy } from '@/types/test';
+import type { AIValidationData } from '@/types/validation';
 
 export interface StepExecutionContext {
   urlBefore: string;
@@ -15,6 +16,7 @@ export interface StepResult {
   screenshot?: string;
   pageResponse?: string; // Captured page feedback (success/error messages)
   context?: StepExecutionContext; // Rich context for AI validation
+  aiValidation?: AIValidationData; // AI validation result (added after execution)
 }
 
 export interface PlaybackResult {
@@ -176,11 +178,32 @@ export class PlaybackEngine {
       const urlAfter = window.location.href;
       const titleAfter = document.title;
 
+      // Try to highlight the failed element and capture a screenshot
+      let screenshot: string | undefined;
+      try {
+        // Try to find and highlight the element that failed
+        const failedElement = this.tryFindFailedElement(step.selectors);
+        if (failedElement) {
+          this.highlightElement(failedElement);
+        }
+
+        // Capture screenshot with highlighted element
+        screenshot = await this.captureScreenshot();
+
+        // Remove highlight after capture
+        if (failedElement) {
+          this.removeHighlight(failedElement);
+        }
+      } catch (screenshotError) {
+        console.warn('[PlaybackEngine] Failed to capture screenshot:', screenshotError);
+      }
+
       return {
         stepId: step.id,
         status: 'failed',  // Execution errors are always failures
         duration: 0,
         error: error instanceof Error ? error.message : String(error),
+        screenshot,
         pageResponse,
         context: {
           urlBefore,
@@ -531,6 +554,97 @@ export class PlaybackEngine {
 
   private sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Try to find the element that failed (for highlighting)
+   * This is a best-effort attempt that doesn't throw
+   */
+  private tryFindFailedElement(selectors: SelectorStrategy[]): Element | null {
+    if (!selectors || selectors.length === 0) return null;
+
+    for (const selector of selectors) {
+      try {
+        let element: Element | null = null;
+
+        switch (selector.type) {
+          case 'css':
+          case 'data-testid':
+          case 'data-cy':
+          case 'aria':
+            element = document.querySelector(selector.value);
+            break;
+          case 'xpath':
+            const result = document.evaluate(
+              selector.value,
+              document,
+              null,
+              XPathResult.FIRST_ORDERED_NODE_TYPE,
+              null
+            );
+            element = result.singleNodeValue as Element;
+            break;
+        }
+
+        if (element) {
+          return element;
+        }
+      } catch {
+        // Continue to next selector
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Highlight an element with a red border to indicate failure
+   */
+  private highlightElement(element: Element): void {
+    const htmlEl = element as HTMLElement;
+    // Store original styles
+    htmlEl.dataset.originalOutline = htmlEl.style.outline;
+    htmlEl.dataset.originalBoxShadow = htmlEl.style.boxShadow;
+
+    // Apply failure highlight
+    htmlEl.style.outline = '3px solid #ef4444';
+    htmlEl.style.boxShadow = '0 0 10px 3px rgba(239, 68, 68, 0.5)';
+  }
+
+  /**
+   * Remove the failure highlight from an element
+   */
+  private removeHighlight(element: Element): void {
+    const htmlEl = element as HTMLElement;
+    htmlEl.style.outline = htmlEl.dataset.originalOutline || '';
+    htmlEl.style.boxShadow = htmlEl.dataset.originalBoxShadow || '';
+    delete htmlEl.dataset.originalOutline;
+    delete htmlEl.dataset.originalBoxShadow;
+  }
+
+  /**
+   * Capture a screenshot of the current page via the background script
+   */
+  private async captureScreenshot(): Promise<string | undefined> {
+    try {
+      // Small delay to ensure highlight is rendered
+      await this.sleep(100);
+
+      // Request screenshot from background script
+      const response = await chrome.runtime.sendMessage({
+        type: 'command:capture-screenshot',
+      });
+
+      if (response.success && response.screenshot) {
+        return response.screenshot;
+      }
+
+      console.warn('[PlaybackEngine] Screenshot capture failed:', response.error);
+      return undefined;
+    } catch (error) {
+      console.warn('[PlaybackEngine] Failed to request screenshot:', error);
+      return undefined;
+    }
   }
 }
 

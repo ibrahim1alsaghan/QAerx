@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
-import { ArrowLeft, Play, Save, Loader2, CheckCircle, XCircle, Database, ListChecks, Sparkles, FileDown, Code, Scan } from 'lucide-react';
-import { TestRepository } from '@/core/storage/repositories';
+import { ArrowLeft, Play, Save, Loader2, CheckCircle, XCircle, Database, ListChecks, Sparkles, FileDown, Code, History } from 'lucide-react';
+import { TestRepository, ResultRepository } from '@/core/storage/repositories';
+import type { TestRun } from '@/types/result';
 import { StepEditor } from '../steps/StepEditor';
 import { DataPanel } from '../data/DataPanel';
 import { ExportModal } from '../export/ExportModal';
@@ -11,6 +12,7 @@ import { clsx } from 'clsx';
 import { AIService } from '@/core/services/AIService';
 import { AIValidationService } from '@/core/services/AIValidationService';
 import { PDFReportService } from '@/core/services/PDFReportService';
+import { logger, sendToContent } from '@/shared/utils';
 
 interface TestDetailProps {
   testId: string;
@@ -46,6 +48,10 @@ export function TestDetail({ testId, onBack }: TestDetailProps) {
   const [hasChanges, setHasChanges] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  // Page direction for localized test data generation
+  const [pageDirection, setPageDirection] = useState<{ direction: 'rtl' | 'ltr'; language?: string }>({ direction: 'ltr' });
+  // Test run history (last 10 runs)
+  const [testHistory, setTestHistory] = useState<TestRun[]>([]);
 
   useEffect(() => {
     TestRepository.getById(testId).then((t) => {
@@ -59,6 +65,9 @@ export function TestDetail({ testId, onBack }: TestDetailProps) {
           setDataSetScenarios(storedScenarios as ScenarioType[]);
         }
         setIsAIGenerated(t.dataSource?.type === 'ai-generated');
+
+        // Load test run history (last 10 runs)
+        ResultRepository.getByTest(testId, 10).then(setTestHistory).catch(console.error);
       }
     });
   }, [testId]);
@@ -82,23 +91,43 @@ export function TestDetail({ testId, onBack }: TestDetailProps) {
         return;
       }
 
-      const loadingToast = toast.loading('Generating test data with AI...');
+      const loadingToast = toast.loading('Detecting page direction...');
+
+      // Get current page direction for localized data
+      let direction: 'rtl' | 'ltr' = pageDirection.direction;
+      let language = pageDirection.language;
+
+      try {
+        const response = await sendToContent<{ success: boolean; analysis: any }>(
+          { type: 'analyzer:getFullAnalysis' }
+        );
+        if (response.success && response.analysis?.metadata) {
+          direction = response.analysis.metadata.direction || 'ltr';
+          language = response.analysis.metadata.language;
+          setPageDirection({ direction, language });
+        }
+      } catch {
+        // Use cached direction if content script fails
+      }
+
+      toast.loading('Generating test data with AI...', { id: loadingToast });
 
       const aiService = new AIService();
       await aiService.initialize();
 
-      // Generate 3 data sets by default
+      // Generate 3 data sets by default with localization
       const count = dataSets.length > 0 ? dataSets.length : 3;
-      const generatedData = await aiService.generateTestData(steps, count);
+      const generatedData = await aiService.generateTestData(steps, count, { direction, language });
 
       setDataSets(generatedData);
       setIsAIGenerated(true);
       setHasChanges(true);
 
       toast.dismiss(loadingToast);
-      toast.success(`Generated ${generatedData.length} data sets with AI ✨`);
+      const localeMsg = direction === 'rtl' ? ' (Arabic)' : '';
+      toast.success(`Generated ${generatedData.length} data sets${localeMsg} ✨`);
     } catch (error: any) {
-      console.error('AI generation error:', error);
+      logger.error('AI generation error:', error);
       toast.error(error.message || 'Failed to generate data with AI');
     }
   };
@@ -110,18 +139,32 @@ export function TestDetail({ testId, onBack }: TestDetailProps) {
         return;
       }
 
-      const loadingToast = toast.loading('Generating scenario-based test data with AI...');
+      const loadingToast = toast.loading('Detecting page direction...');
+
+      // Get current page direction for localized data
+      let direction: 'rtl' | 'ltr' = pageDirection.direction;
+      let language = pageDirection.language;
+
+      try {
+        const response = await sendToContent<{ success: boolean; analysis: any }>(
+          { type: 'analyzer:getFullAnalysis' }
+        );
+        if (response.success && response.analysis?.metadata) {
+          direction = response.analysis.metadata.direction || 'ltr';
+          language = response.analysis.metadata.language;
+          setPageDirection({ direction, language });
+        }
+      } catch {
+        // Use cached direction if content script fails
+      }
+
+      toast.loading('Generating scenario-based test data with AI...', { id: loadingToast });
 
       const aiService = new AIService();
       await aiService.initialize();
 
-      // Generate scenario-based data sets (best case, worst case, edge case, boundary)
-      const result = await aiService.generateScenarioTestData(steps, {
-        bestCase: 1,
-        worstCase: 2,
-        edgeCase: 1,
-        boundary: 1,
-      });
+      // Generate scenario-based data sets with localization
+      const result = await aiService.generateScenarioTestData(steps, { direction, language });
 
       setDataSets(result.dataSets);
       setDataSetScenarios(result.scenarios);
@@ -129,176 +172,49 @@ export function TestDetail({ testId, onBack }: TestDetailProps) {
       setHasChanges(true);
 
       toast.dismiss(loadingToast);
-      toast.success(`Generated ${result.dataSets.length} scenario data sets (Best/Worst/Edge/Boundary) ✨`);
-    } catch (error: any) {
-      console.error('AI scenario generation error:', error);
-      toast.error(error.message || 'Failed to generate scenario data with AI');
+      const localeMsg = direction === 'rtl' ? ' (Arabic)' : '';
+      toast.success(`Generated ${result.dataSets.length} test scenarios${localeMsg}`);
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : 'Failed to generate scenario data with AI';
+      logger.error('AI scenario generation error:', error);
+      toast.error(errorMessage);
     }
   };
 
-  const handleAIAnalyzePage = async () => {
-    try {
-      setIsAnalyzing(true);
-      const loadingToast = toast.loading('Analyzing page with AI...');
+  // Helper: Create steps from page analysis
+  const createStepsFromAnalysis = (analysis: any, startOrder: number): UIStep[] => {
+    const newSteps: UIStep[] = [];
+    let order = startOrder;
 
-      // Get active tab
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!tab.id) {
-        throw new Error('No active tab found');
+    // Track used variable names to avoid collisions
+    const usedVarNames = new Set<string>();
+    const getUniqueVarName = (baseName: string): string => {
+      let sanitized = baseName
+        .replace(/[^a-zA-Z0-9]/g, '_')
+        .replace(/_+/g, '_')
+        .replace(/^_|_$/g, '')
+        .toLowerCase();
+      if (/^\d/.test(sanitized)) sanitized = 'field_' + sanitized;
+      if (!sanitized) sanitized = 'field';
+
+      let finalName = sanitized;
+      let counter = 1;
+      while (usedVarNames.has(finalName)) {
+        finalName = `${sanitized}_${counter}`;
+        counter++;
       }
+      usedVarNames.add(finalName);
+      return finalName;
+    };
 
-      // Inject content script if needed
-      try {
-        await chrome.tabs.sendMessage(tab.id, { type: 'ping' });
-      } catch {
-        await chrome.scripting.executeScript({
-          target: { tabId: tab.id },
-          files: ['content.js'],
-        });
-        await new Promise(resolve => setTimeout(resolve, 500));
-      }
+    // Process all forms
+    analysis.forms.forEach((form: any) => {
+      form.fields.forEach((field: any) => {
+        const fieldName = field.label || field.placeholder || field.name || field.id || 'field';
+        const varName = getUniqueVarName(field.name || field.id || fieldName);
+        const confidence = field.confidence ?? 0.75;
 
-      // Get page context from content script
-      const response = await chrome.tabs.sendMessage(tab.id, { type: 'analyzer:getPageContext' });
-
-      const aiService = new AIService();
-      await aiService.initialize();
-
-      // Analyze page and get suggested test steps
-      const suggestedSteps = await aiService.analyzePageAndSuggestTests(response.context);
-
-      // Add suggested steps to current test
-      setSteps((prev) => [...prev, ...suggestedSteps]);
-      setHasChanges(true);
-
-      toast.dismiss(loadingToast);
-      toast.success(`AI suggested ${suggestedSteps.length} test steps ✨`);
-    } catch (error: any) {
-      console.error('AI analysis error:', error);
-      toast.error(error.message || 'Failed to analyze page with AI');
-    } finally {
-      setIsAnalyzing(false);
-    }
-  };
-
-  const handleCollectFields = async () => {
-    try {
-      const loadingToast = toast.loading('Scanning page for form fields...');
-
-      // Get active tab
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!tab.id) {
-        throw new Error('No active tab found');
-      }
-
-      // Inject content script if needed
-      try {
-        await chrome.tabs.sendMessage(tab.id, { type: 'ping' });
-      } catch {
-        await chrome.scripting.executeScript({
-          target: { tabId: tab.id },
-          files: ['content.js'],
-        });
-        await new Promise(resolve => setTimeout(resolve, 500));
-      }
-
-      // Get full page analysis from content script
-      const response = await chrome.tabs.sendMessage(tab.id, { type: 'analyzer:getFullAnalysis' });
-
-      if (!response.success) {
-        throw new Error(response.error || 'Failed to analyze page');
-      }
-
-      const analysis = response.analysis;
-
-      // Create steps from detected fields
-      const newSteps: UIStep[] = [];
-      let order = steps.length;
-
-      // Track used variable names to avoid collisions
-      const usedVarNames = new Set<string>();
-      const getUniqueVarName = (baseName: string): string => {
-        let sanitized = baseName
-          .replace(/[^a-zA-Z0-9]/g, '_')
-          .replace(/_+/g, '_')
-          .replace(/^_|_$/g, '')
-          .toLowerCase();
-        if (/^\d/.test(sanitized)) sanitized = 'field_' + sanitized;
-        if (!sanitized) sanitized = 'field';
-
-        let finalName = sanitized;
-        let counter = 1;
-        while (usedVarNames.has(finalName)) {
-          finalName = `${sanitized}_${counter}`;
-          counter++;
-        }
-        usedVarNames.add(finalName);
-        return finalName;
-      };
-
-      // Process all forms
-      analysis.forms.forEach((form: any) => {
-        form.fields.forEach((field: any) => {
-          const fieldName = field.label || field.placeholder || field.name || field.id || 'field';
-          const varName = getUniqueVarName(field.name || field.id || fieldName);
-          // Use confidence from PageAnalyzer, fallback to 0.75 if not provided
-          const confidence = field.confidence ?? 0.75;
-
-          if (field.type === 'text' || field.type === 'email' || field.type === 'password' || field.type === 'tel' || field.type === 'number' || field.type === 'textarea' || field.type === 'search' || field.type === 'url') {
-            newSteps.push({
-              id: crypto.randomUUID(),
-              type: 'ui',
-              order: order++,
-              name: `Enter ${fieldName}`,
-              enabled: true,
-              continueOnFailure: false,
-              action: { type: 'type', text: `{{${varName}}}` },
-              selectors: [{ type: 'css', value: field.selector, priority: 0, confidence }],
-            });
-          } else if (field.type === 'select' || field.type === 'select-one' || field.type === 'select-multiple') {
-            newSteps.push({
-              id: crypto.randomUUID(),
-              type: 'ui',
-              order: order++,
-              name: `Select ${fieldName}`,
-              enabled: true,
-              continueOnFailure: false,
-              action: { type: 'select', value: `{{${varName}}}` },
-              selectors: [{ type: 'css', value: field.selector, priority: 0, confidence }],
-            });
-          } else if (field.type === 'checkbox' || field.type === 'radio') {
-            newSteps.push({
-              id: crypto.randomUUID(),
-              type: 'ui',
-              order: order++,
-              name: `Check ${fieldName}`,
-              enabled: true,
-              continueOnFailure: false,
-              action: { type: 'check' },
-              selectors: [{ type: 'css', value: field.selector, priority: 0, confidence }],
-            });
-          } else if (field.type === 'date' || field.type === 'datetime-local' || field.type === 'time' || field.type === 'month' || field.type === 'week') {
-            newSteps.push({
-              id: crypto.randomUUID(),
-              type: 'ui',
-              order: order++,
-              name: `Enter ${fieldName}`,
-              enabled: true,
-              continueOnFailure: false,
-              action: { type: 'type', text: `{{${varName}}}` },
-              selectors: [{ type: 'css', value: field.selector, priority: 0, confidence }],
-            });
-          }
-        });
-      });
-
-      // Process standalone inputs
-      analysis.inputs.forEach((input: any) => {
-        const fieldName = input.label || input.placeholder || input.name || input.id || 'field';
-        const varName = getUniqueVarName(input.name || input.id || fieldName);
-        const confidence = input.confidence ?? 0.75;
-
-        if (input.type === 'text' || input.type === 'email' || input.type === 'password' || input.type === 'tel' || input.type === 'number' || input.type === 'textarea' || input.type === 'search' || input.type === 'url') {
+        if (field.type === 'text' || field.type === 'email' || field.type === 'password' || field.type === 'tel' || field.type === 'number' || field.type === 'textarea' || field.type === 'search' || field.type === 'url') {
           newSteps.push({
             id: crypto.randomUUID(),
             type: 'ui',
@@ -307,59 +223,176 @@ export function TestDetail({ testId, onBack }: TestDetailProps) {
             enabled: true,
             continueOnFailure: false,
             action: { type: 'type', text: `{{${varName}}}` },
-            selectors: [{ type: 'css', value: input.selector, priority: 0, confidence }],
+            selectors: [{ type: 'css', value: field.selector, priority: 0, confidence }],
+          });
+        } else if (field.type === 'select' || field.type === 'select-one' || field.type === 'select-multiple') {
+          newSteps.push({
+            id: crypto.randomUUID(),
+            type: 'ui',
+            order: order++,
+            name: `Select ${fieldName}`,
+            enabled: true,
+            continueOnFailure: false,
+            action: { type: 'select', value: `{{${varName}}}` },
+            selectors: [{ type: 'css', value: field.selector, priority: 0, confidence }],
+          });
+        } else if (field.type === 'checkbox' || field.type === 'radio') {
+          newSteps.push({
+            id: crypto.randomUUID(),
+            type: 'ui',
+            order: order++,
+            name: `Check ${fieldName}`,
+            enabled: true,
+            continueOnFailure: false,
+            action: { type: 'check' },
+            selectors: [{ type: 'css', value: field.selector, priority: 0, confidence }],
+          });
+        } else if (field.type === 'date' || field.type === 'datetime-local' || field.type === 'time' || field.type === 'month' || field.type === 'week') {
+          newSteps.push({
+            id: crypto.randomUUID(),
+            type: 'ui',
+            order: order++,
+            name: `Enter ${fieldName}`,
+            enabled: true,
+            continueOnFailure: false,
+            action: { type: 'type', text: `{{${varName}}}` },
+            selectors: [{ type: 'css', value: field.selector, priority: 0, confidence }],
           });
         }
       });
+    });
 
-      // Add submit button if found - prefer login/signin buttons for login forms
-      let submitButton = analysis.buttons.find((btn: any) =>
-        btn.text.toLowerCase().includes('login') ||
-        btn.text.toLowerCase().includes('sign in') ||
-        btn.text.toLowerCase().includes('log in')
-      );
+    // Process standalone inputs
+    analysis.inputs.forEach((input: any) => {
+      const fieldName = input.label || input.placeholder || input.name || input.id || 'field';
+      const varName = getUniqueVarName(input.name || input.id || fieldName);
+      const confidence = input.confidence ?? 0.75;
 
-      if (!submitButton) {
-        submitButton = analysis.buttons.find((btn: any) =>
-          btn.type === 'submit' ||
-          btn.text.toLowerCase().includes('submit') ||
-          btn.text.toLowerCase().includes('save') ||
-          btn.text.toLowerCase().includes('create') ||
-          btn.text.toLowerCase().includes('register') ||
-          btn.text.toLowerCase().includes('sign up')
-        );
-      }
-
-      if (submitButton) {
-        const confidence = submitButton.confidence ?? 0.75;
+      if (input.type === 'text' || input.type === 'email' || input.type === 'password' || input.type === 'tel' || input.type === 'number' || input.type === 'textarea' || input.type === 'search' || input.type === 'url') {
         newSteps.push({
           id: crypto.randomUUID(),
           type: 'ui',
           order: order++,
-          name: `Click ${submitButton.text}`,
+          name: `Enter ${fieldName}`,
           enabled: true,
           continueOnFailure: false,
-          action: { type: 'click' },
-          selectors: [{ type: 'css', value: submitButton.selector, priority: 0, confidence }],
+          action: { type: 'type', text: `{{${varName}}}` },
+          selectors: [{ type: 'css', value: input.selector, priority: 0, confidence }],
+        });
+      }
+    });
+
+    // Add submit button if found - prefer login/signin buttons for login forms
+    let submitButton = analysis.buttons.find((btn: any) =>
+      btn.text.toLowerCase().includes('login') ||
+      btn.text.toLowerCase().includes('sign in') ||
+      btn.text.toLowerCase().includes('log in')
+    );
+
+    if (!submitButton) {
+      submitButton = analysis.buttons.find((btn: any) =>
+        btn.type === 'submit' ||
+        btn.text.toLowerCase().includes('submit') ||
+        btn.text.toLowerCase().includes('save') ||
+        btn.text.toLowerCase().includes('create') ||
+        btn.text.toLowerCase().includes('register') ||
+        btn.text.toLowerCase().includes('sign up')
+      );
+    }
+
+    if (submitButton) {
+      const confidence = submitButton.confidence ?? 0.75;
+      newSteps.push({
+        id: crypto.randomUUID(),
+        type: 'ui',
+        order: order++,
+        name: `Click ${submitButton.text}`,
+        enabled: true,
+        continueOnFailure: false,
+        action: { type: 'click' },
+        selectors: [{ type: 'css', value: submitButton.selector, priority: 0, confidence }],
+      });
+    }
+
+    return newSteps;
+  };
+
+  // Smart Collect: Scan page fields + enhance with AI
+  const handleSmartCollect = async () => {
+    let collectedSteps: UIStep[] = [];
+
+    try {
+      setIsAnalyzing(true);
+      const loadingToast = toast.loading('Scanning page...');
+
+      // Step 1: Get full page analysis from content script
+      const response = await sendToContent<{ success: boolean; analysis: any; error?: string }>(
+        { type: 'analyzer:getFullAnalysis' }
+      );
+
+      if (!response.success) {
+        toast.dismiss(loadingToast);
+        throw new Error(response.error || 'Failed to analyze page');
+      }
+
+      const analysis = response.analysis;
+
+      // Save page direction for localized data generation
+      if (analysis.metadata) {
+        setPageDirection({
+          direction: analysis.metadata.direction || 'ltr',
+          language: analysis.metadata.language,
         });
       }
 
-      if (newSteps.length === 0) {
+      // Step 2: Create basic steps from analysis
+      collectedSteps = createStepsFromAnalysis(analysis, steps.length);
+
+      if (collectedSteps.length === 0) {
         toast.dismiss(loadingToast);
         toast.error('No form fields found on this page');
         return;
       }
 
-      setSteps((prev) => [...prev, ...newSteps]);
-      setHasChanges(true);
+      // Step 3: Try to enhance with AI
+      toast.loading('Enhancing with AI...', { id: loadingToast });
 
-      toast.dismiss(loadingToast);
-      const formCount = analysis.forms.length;
-      const inputCount = analysis.inputs.length;
-      toast.success(`Added ${newSteps.length} steps from ${formCount} form${formCount !== 1 ? 's' : ''} and ${inputCount} standalone input${inputCount !== 1 ? 's' : ''}`);
+      try {
+        const aiService = new AIService();
+        await aiService.initialize();
+
+        const enhancedSteps = await aiService.enhanceCollectedSteps(
+          collectedSteps,
+          analysis.metadata
+        );
+
+        setSteps((prev) => [...prev, ...enhancedSteps]);
+        setHasChanges(true);
+
+        toast.dismiss(loadingToast);
+        toast.success(`Added ${enhancedSteps.length} steps with smart variables ✨`);
+      } catch (aiError) {
+        // AI failed - still add the basic steps
+        logger.warn('AI enhancement failed, using basic steps:', aiError);
+        setSteps((prev) => [...prev, ...collectedSteps]);
+        setHasChanges(true);
+
+        toast.dismiss(loadingToast);
+        toast.success(`Added ${collectedSteps.length} steps (AI enhancement unavailable)`);
+      }
     } catch (error: any) {
-      console.error('Collect fields error:', error);
-      toast.error(error.message || 'Failed to collect fields');
+      logger.error('Smart collect error:', error);
+
+      // If we have collected steps but got an error later, still add them
+      if (collectedSteps.length > 0) {
+        setSteps((prev) => [...prev, ...collectedSteps]);
+        setHasChanges(true);
+        toast.success(`Added ${collectedSteps.length} steps`);
+      } else {
+        toast.error(error.message || 'Failed to collect fields');
+      }
+    } finally {
+      setIsAnalyzing(false);
     }
   };
 
@@ -387,7 +420,7 @@ export function TestDetail({ testId, onBack }: TestDetailProps) {
       toast.dismiss(loadingToast);
       toast.success('PDF report downloaded ✨');
     } catch (error: any) {
-      console.error('PDF generation error:', error);
+      logger.error('PDF generation error:', error);
       toast.error(error.message || 'Failed to generate PDF report');
     }
   };
@@ -444,7 +477,7 @@ export function TestDetail({ testId, onBack }: TestDetailProps) {
     try {
       await validationService.initialize();
     } catch (error) {
-      console.warn('AI validation not available, using fallback:', error);
+      logger.warn('AI validation not available, using fallback:', error);
     }
 
     // Helper function to validate a step result with AI
@@ -583,7 +616,11 @@ export function TestDetail({ testId, onBack }: TestDetailProps) {
                     timeout: 30000,
                   });
 
-                  if (response?.result?.stepResults) {
+                  // Handle page navigation during execution (message channel closed)
+                  if (response?.navigated === true) {
+                    logger.warn('Page navigated during step execution, some steps may not have completed');
+                    // Continue without error - navigation is expected in some test flows
+                  } else if (response?.result?.stepResults) {
                     // Validate each step result with AI
                     for (const stepResult of response.result.stepResults) {
                       const step = currentSteps.find(s => s.id === stepResult.stepId);
@@ -606,8 +643,17 @@ export function TestDetail({ testId, onBack }: TestDetailProps) {
                     }
                   }
                 } catch (error) {
-                  console.error('Error executing steps before navigation:', error);
-                  throw new Error(`Step execution failed: ${error instanceof Error ? error.message : String(error)}`);
+                  // Check if this is a navigation-related error
+                  const errorMsg = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+                  if (errorMsg.includes('message channel closed') ||
+                      errorMsg.includes('receiving end does not exist') ||
+                      errorMsg.includes('context invalidated')) {
+                    logger.warn('Page navigation detected during step execution');
+                    // Continue without throwing - this is expected when page navigates
+                  } else {
+                    logger.error('Error executing steps before navigation:', error);
+                    throw new Error(`Step execution failed: ${error instanceof Error ? error.message : String(error)}`);
+                  }
                 }
                 currentSteps = [];
               }
@@ -710,7 +756,11 @@ export function TestDetail({ testId, onBack }: TestDetailProps) {
                 timeout: 30000,
               });
 
-              if (response?.result?.stepResults) {
+              // Handle page navigation during execution (message channel closed)
+              if (response?.navigated === true) {
+                logger.warn('Page navigated during remaining step execution');
+                // Continue without error - navigation may be expected
+              } else if (response?.result?.stepResults) {
                 // Validate each step result with AI
                 for (const stepResult of response.result.stepResults) {
                   const step = currentSteps.find(s => s.id === stepResult.stepId);
@@ -733,8 +783,17 @@ export function TestDetail({ testId, onBack }: TestDetailProps) {
                 }
               }
             } catch (error) {
-              console.error('Error executing remaining steps:', error);
-              throw new Error(`Step execution failed: ${error instanceof Error ? error.message : String(error)}`);
+              // Check if this is a navigation-related error
+              const errorMsg = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+              if (errorMsg.includes('message channel closed') ||
+                  errorMsg.includes('receiving end does not exist') ||
+                  errorMsg.includes('context invalidated')) {
+                logger.warn('Page navigation detected during remaining step execution');
+                // Continue without throwing - this is expected when page navigates
+              } else {
+                logger.error('Error executing remaining steps:', error);
+                throw new Error(`Step execution failed: ${error instanceof Error ? error.message : String(error)}`);
+              }
             }
           }
         } finally {
@@ -743,8 +802,37 @@ export function TestDetail({ testId, onBack }: TestDetailProps) {
       }
 
       toast.success('Test completed!');
+
+      // Save test run to history
+      if (test) {
+        try {
+          const finalResults = runProgress?.results || [];
+          const passed = finalResults.filter(r => r.status === 'passed').length;
+          const failed = finalResults.filter(r => r.status === 'failed').length;
+          const status = failed > 0 ? 'failed' : 'passed';
+
+          const testRun = await ResultRepository.create(test.id, test.suiteId);
+          await ResultRepository.update(testRun.id, {
+            completedAt: Date.now(),
+            status,
+            summary: {
+              totalSteps: finalResults.length,
+              passedSteps: passed,
+              failedSteps: failed,
+              skippedSteps: 0,
+              duration: Date.now() - testRun.startedAt,
+            },
+          });
+
+          // Refresh history
+          const history = await ResultRepository.getByTest(test.id, 10);
+          setTestHistory(history);
+        } catch (historyError) {
+          logger.warn('Failed to save test run to history:', historyError);
+        }
+      }
     } catch (error) {
-      console.error('Test execution error:', error);
+      logger.error('Test execution error:', error);
       toast.error('Test execution failed: ' + (error instanceof Error ? error.message : 'Unknown error'));
     } finally {
       setIsRunning(false);
@@ -771,29 +859,36 @@ export function TestDetail({ testId, onBack }: TestDetailProps) {
         </button>
         <div className="flex-1 min-w-0">
           <h2 className="text-lg font-medium text-dark-100 truncate">{test.name}</h2>
-          <p className="text-xs text-dark-500 truncate">{test.url}</p>
+          <div className="flex items-center gap-2">
+            <p className="text-xs text-dark-500 truncate">{test.url}</p>
+            {testHistory.length > 0 && (
+              <div className="flex items-center gap-1.5 text-xs" title={`Last ${testHistory.length} runs`}>
+                <History className="w-3 h-3 text-dark-500" />
+                <span className="text-emerald-400">
+                  {testHistory.filter(r => r.status === 'passed').length}
+                </span>
+                <span className="text-dark-600">/</span>
+                <span className="text-red-400">
+                  {testHistory.filter(r => r.status === 'failed').length}
+                </span>
+                <span className="text-dark-500 ml-1">
+                  ({Math.round((testHistory.filter(r => r.status === 'passed').length / testHistory.length) * 100)}%)
+                </span>
+              </div>
+            )}
+          </div>
         </div>
         <div className="flex items-center gap-2">
           {activeTab === 'steps' && !isRunning && (
-            <>
-              <button
-                onClick={handleCollectFields}
-                className="btn btn-sm btn-ghost text-cyan-400 hover:bg-cyan-400/10"
-                title="Scan page and collect all form fields"
-              >
-                <Scan className="w-4 h-4" />
-                Collect Fields
-              </button>
-              <button
-                onClick={handleAIAnalyzePage}
-                disabled={isAnalyzing}
-                className="btn btn-sm btn-ghost text-purple-400 hover:bg-purple-400/10"
-                title="AI analyze page and suggest test steps"
-              >
-                {isAnalyzing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-                AI Analyze
-              </button>
-            </>
+            <button
+              onClick={handleSmartCollect}
+              disabled={isAnalyzing}
+              className="btn btn-sm btn-ghost text-cyan-400 hover:bg-cyan-400/10"
+              title="Scan page fields and enhance with AI"
+            >
+              {isAnalyzing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+              Smart Collect
+            </button>
           )}
           {steps.length > 0 && !isRunning && (
             <button

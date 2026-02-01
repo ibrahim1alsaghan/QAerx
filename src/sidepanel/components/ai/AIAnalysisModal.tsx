@@ -4,6 +4,7 @@ import { AIService } from '@/core/services/AIService';
 import type { UIStep } from '@/types/test';
 import toast from 'react-hot-toast';
 import { clsx } from 'clsx';
+import { sendToContent, logger } from '@/shared/utils';
 
 interface PageAnalysisResult {
   url: string;
@@ -69,34 +70,20 @@ export function AIAnalysisModal({ isOpen, onClose, onAddSteps }: AIAnalysisModal
     setError(null);
 
     try {
-      // Get active tab
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!tab.id) {
-        throw new Error('No active tab found. Please open a web page first.');
-      }
-
-      // Inject content script if needed
-      try {
-        await chrome.tabs.sendMessage(tab.id, { type: 'ping' });
-      } catch {
-        await chrome.scripting.executeScript({
-          target: { tabId: tab.id },
-          files: ['content.js'],
-        });
-        await new Promise(resolve => setTimeout(resolve, 500));
-      }
-
-      // Get full page analysis from content script
-      const response = await chrome.tabs.sendMessage(tab.id, { type: 'analyzer:getFullAnalysis' });
+      // Get full page analysis from content script with retry logic
+      const response = await sendToContent<{ success: boolean; analysis: PageAnalysisResult; error?: string }>(
+        { type: 'analyzer:getFullAnalysis' }
+      );
 
       if (!response?.success) {
         throw new Error(response?.error || 'Failed to analyze page');
       }
 
       setPageAnalysis(response.analysis);
-    } catch (err: any) {
-      console.error('Page analysis error:', err);
-      setError(err.message || 'Failed to analyze page');
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to analyze page';
+      logger.error('Page analysis error:', err);
+      setError(errorMessage);
     } finally {
       setIsAnalyzing(false);
     }

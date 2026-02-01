@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Target, CheckCircle, AlertCircle, Loader2, ChevronDown, ChevronUp, Eye } from 'lucide-react';
+import { useState, useMemo } from 'react';
+import { Target, CheckCircle, AlertCircle, Loader2, ChevronDown, ChevronUp, Eye, AlertTriangle } from 'lucide-react';
 import { useSelectorValidation } from '../../hooks/useSelectorValidation';
 import type { SelectorStrategy } from '@/types/test';
 import { clsx } from 'clsx';
@@ -11,10 +11,75 @@ interface SelectorInputProps {
   onSuggestionsRequest?: () => void;
 }
 
+/**
+ * Check if a selector contains dynamic/unstable IDs that may change on page refresh
+ * Returns warning message if dynamic, null if stable
+ */
+function checkDynamicSelector(selector: string): string | null {
+  if (!selector) return null;
+
+  // Extract ID from selector
+  const idMatch = selector.match(/#([a-zA-Z0-9_-]+)/);
+  if (idMatch) {
+    const id = idMatch[1];
+
+    // Dynamic ID patterns
+    const dynamicPatterns = [
+      // Frappe framework patterns (most common issue)
+      { pattern: /^frappe[-_]ui[-_]\d+$/i, name: 'Frappe UI' },
+      { pattern: /^frappe[-_]\d+$/i, name: 'Frappe' },
+      { pattern: /^control-\d+-\d+$/i, name: 'Frappe control' },
+      { pattern: /^awesomplete[-_]\d+$/i, name: 'Awesomplete' },
+
+      // React patterns
+      { pattern: /^:r[0-9]+:?$/, name: 'React useId' },
+      { pattern: /^react-[a-z]+-\d+$/i, name: 'React' },
+
+      // Other frameworks
+      { pattern: /^ember\d+$/, name: 'Ember' },
+      { pattern: /^ng-\d+$/, name: 'Angular' },
+      { pattern: /^ng_\d+$/, name: 'Angular' },
+      { pattern: /^mui-\d+$/, name: 'MUI' },
+      { pattern: /^headlessui-[a-z]+-\d+$/i, name: 'Headless UI' },
+      { pattern: /^radix-[a-z]+-\d+$/i, name: 'Radix UI' },
+      { pattern: /^select2-[a-z]+-[a-z0-9]+$/i, name: 'Select2' },
+      { pattern: /^react-select-\d+/i, name: 'React Select' },
+
+      // Generic patterns
+      { pattern: /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i, name: 'UUID' },
+      { pattern: /^[a-f0-9]{32}$/i, name: 'hash' },
+      { pattern: /^\d+$/, name: 'numeric' },
+      { pattern: /^uid[-_]\d+$/i, name: 'UID' },
+      { pattern: /^id[-_]\d+$/i, name: 'ID' },
+    ];
+
+    for (const { pattern, name } of dynamicPatterns) {
+      if (pattern.test(id)) {
+        return `⚠️ Dynamic ${name} ID detected. This selector may break on page refresh. Consider using [name], [data-testid], or [aria-label] instead.`;
+      }
+    }
+  }
+
+  // Check for nth-child/nth-of-type which are position-dependent
+  if (/nth-(child|of-type)\(\d+\)/.test(selector)) {
+    return '⚠️ Position-based selector detected. This may break if page structure changes.';
+  }
+
+  // Check for very long/deep selectors
+  if ((selector.match(/ > /g) || []).length > 4) {
+    return '⚠️ Deep selector path detected. This may break if page structure changes.';
+  }
+
+  return null;
+}
+
 export function SelectorInput({ value, onChange, suggestions = [], onSuggestionsRequest }: SelectorInputProps) {
   const validation = useSelectorValidation(value);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [isPicking, setIsPicking] = useState(false);
+
+  // Check for dynamic selectors that may break on page refresh
+  const dynamicWarning = useMemo(() => checkDynamicSelector(value), [value]);
 
   const handleHighlightElement = async () => {
     if (!value) return;
@@ -189,6 +254,14 @@ export function SelectorInput({ value, onChange, suggestions = [], onSuggestions
             {validation.message}
           </p>
         )}
+
+        {/* Dynamic selector warning */}
+        {dynamicWarning && (
+          <div className="flex items-start gap-2 mt-2 p-2 bg-amber-500/10 border border-amber-500/30 rounded-lg">
+            <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
+            <p className="text-xs text-amber-300">{dynamicWarning}</p>
+          </div>
+        )}
       </div>
 
       {/* Suggestions dropdown */}
@@ -197,39 +270,72 @@ export function SelectorInput({ value, onChange, suggestions = [], onSuggestions
           <div className="text-xs text-dark-400 px-2 py-1">
             Suggestions (click to use):
           </div>
-          {suggestions.slice(0, 5).map((suggestion, index) => (
-            <button
-              key={index}
-              onClick={() => {
-                onChange(suggestion.value);
-                setShowSuggestions(false);
-              }}
-              className="w-full text-left px-3 py-2 rounded hover:bg-dark-700 transition-colors"
-            >
-              <div className="flex items-center justify-between">
-                <code className="text-xs text-dark-200 font-mono">
-                  {suggestion.value}
-                </code>
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-dark-500">
-                    {suggestion.type}
-                  </span>
-                  <span
-                    className={clsx(
-                      'text-xs px-1.5 py-0.5 rounded',
-                      suggestion.confidence > 0.8
-                        ? 'bg-green-400/20 text-green-400'
-                        : suggestion.confidence > 0.6
-                          ? 'bg-yellow-400/20 text-yellow-400'
-                          : 'bg-dark-700 text-dark-400'
+          {suggestions.slice(0, 5).map((suggestion, index) => {
+            const isDynamic = checkDynamicSelector(suggestion.value);
+            const stabilityLabel = suggestion.type === 'data-testid' || suggestion.type === 'data-cy'
+              ? '✓ Stable'
+              : suggestion.type === 'aria'
+                ? '✓ Good'
+                : suggestion.value.includes('[name=')
+                  ? '~ OK'
+                  : isDynamic
+                    ? '⚠️ Unstable'
+                    : '';
+
+            return (
+              <button
+                key={index}
+                onClick={() => {
+                  onChange(suggestion.value);
+                  setShowSuggestions(false);
+                }}
+                className={clsx(
+                  "w-full text-left px-3 py-2 rounded hover:bg-dark-700 transition-colors",
+                  isDynamic && "border border-amber-500/30 bg-amber-500/5"
+                )}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <code className="text-xs text-dark-200 font-mono truncate flex-1">
+                    {suggestion.value}
+                  </code>
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    {stabilityLabel && (
+                      <span
+                        className={clsx(
+                          'text-xs px-1.5 py-0.5 rounded whitespace-nowrap',
+                          stabilityLabel.includes('Stable') || stabilityLabel.includes('Good')
+                            ? 'bg-green-400/20 text-green-400'
+                            : stabilityLabel.includes('OK')
+                              ? 'bg-blue-400/20 text-blue-400'
+                              : 'bg-amber-400/20 text-amber-400'
+                        )}
+                      >
+                        {stabilityLabel}
+                      </span>
                     )}
-                  >
-                    {Math.round(suggestion.confidence * 100)}%
-                  </span>
+                    <span className="text-xs text-dark-500">
+                      {suggestion.type}
+                    </span>
+                    <span
+                      className={clsx(
+                        'text-xs px-1.5 py-0.5 rounded',
+                        suggestion.confidence > 0.8
+                          ? 'bg-green-400/20 text-green-400'
+                          : suggestion.confidence > 0.6
+                            ? 'bg-yellow-400/20 text-yellow-400'
+                            : 'bg-dark-700 text-dark-400'
+                      )}
+                    >
+                      {Math.round(suggestion.confidence * 100)}%
+                    </span>
+                  </div>
                 </div>
-              </div>
-            </button>
-          ))}
+                {isDynamic && (
+                  <p className="text-xs text-amber-400/80 mt-1">May change on refresh</p>
+                )}
+              </button>
+            );
+          })}
         </div>
       )}
     </div>

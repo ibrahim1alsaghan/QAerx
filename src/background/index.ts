@@ -67,6 +67,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ state: recordingState });
       break;
 
+    case 'command:capture-screenshot':
+      captureScreenshot(message.tabId)
+        .then(sendResponse)
+        .catch(err => sendResponse({ success: false, error: err.message }));
+      return true;
+
     default:
       sendResponse({ error: 'Unknown message type' });
   }
@@ -194,6 +200,36 @@ async function stopRecording(): Promise<{ success: boolean; steps?: UIStep[]; er
 async function getActiveTabId(): Promise<number | undefined> {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   return tab?.id;
+}
+
+/**
+ * Capture a screenshot of the visible tab
+ * Used for capturing failure screenshots during test playback
+ */
+async function captureScreenshot(tabId?: number): Promise<{ success: boolean; screenshot?: string; error?: string }> {
+  try {
+    const targetTabId = tabId || (await getActiveTabId());
+    if (!targetTabId) {
+      return { success: false, error: 'No active tab found' };
+    }
+
+    // Get the tab to find its window
+    const tab = await chrome.tabs.get(targetTabId);
+    if (!tab.windowId) {
+      return { success: false, error: 'Tab has no window' };
+    }
+
+    // Capture the visible tab as base64 PNG
+    const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
+      format: 'png',
+      quality: 80,
+    });
+
+    return { success: true, screenshot: dataUrl };
+  } catch (error) {
+    console.error('[QAerx] Failed to capture screenshot:', error);
+    return { success: false, error: error instanceof Error ? error.message : 'Screenshot capture failed' };
+  }
 }
 
 function notifyUI(message: unknown): void {

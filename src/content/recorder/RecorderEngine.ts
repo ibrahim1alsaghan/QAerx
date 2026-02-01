@@ -1,6 +1,8 @@
 import { EventCapture, type CapturedEvent } from './EventCapture';
 import { SelectorGenerator } from './SelectorGenerator';
 import { ActionFilter } from './ActionFilter';
+import { debounce } from '../utils/contentDebounce';
+import { contentLogger as logger } from '../utils/contentLogger';
 import type { UIStep, UIAction, SelectorStrategy } from '@/types/test';
 
 // Use native crypto.randomUUID() instead of uuid package to avoid external imports
@@ -12,17 +14,6 @@ interface RecordingSession {
   isPaused: boolean;
   steps: UIStep[];
   pendingEvents: CapturedEvent[];
-}
-
-function debounce<T extends (...args: unknown[]) => void>(
-  fn: T,
-  delay: number
-): (...args: Parameters<T>) => void {
-  let timeoutId: ReturnType<typeof setTimeout>;
-  return (...args: Parameters<T>) => {
-    clearTimeout(timeoutId);
-    timeoutId = setTimeout(() => fn(...args), delay);
-  };
 }
 
 export class RecorderEngine {
@@ -134,7 +125,7 @@ export class RecorderEngine {
     const selectors = this.selectorGenerator.generate(event.target);
 
     if (selectors.length === 0) {
-      console.warn('Could not generate selectors for element:', event.target);
+      logger.warn('Could not generate selectors for element:', event.target);
       return null;
     }
 
@@ -221,7 +212,7 @@ export class RecorderEngine {
     try {
       chrome.runtime.sendMessage(message);
     } catch (e) {
-      console.error('Failed to send message to background:', e);
+      logger.error('Failed to send message to background:', e);
     }
   }
 }

@@ -10,12 +10,28 @@ import { jsPDF } from 'jspdf';
 // Cache for loaded font data
 let amiriFontData: string | null = null;
 let amiriBoldFontData: string | null = null;
-let fontLoadPromise: Promise<void> | null = null;
+let fontLoadPromise: Promise<boolean> | null = null;
 
-// Amiri font from CDN (Arabic-optimized, supports RTL)
-// Using a reliable CDN that hosts Arabic fonts
-const AMIRI_REGULAR_URL = 'https://cdn.jsdelivr.net/gh/AhmadHussein1/Amiri-fonts@1.0/Amiri-Regular.ttf';
-const AMIRI_BOLD_URL = 'https://cdn.jsdelivr.net/gh/AhmadHussein1/Amiri-fonts@1.0/Amiri-Bold.ttf';
+// Multiple CDN sources for reliability - try each in order
+// Using jsDelivr (npm-based CDN) and unpkg as they have stable URLs
+
+// Amiri font - excellent for Arabic text
+const AMIRI_CDN_SOURCES = [
+  // jsDelivr - stable npm-based CDN
+  'https://cdn.jsdelivr.net/npm/@fontsource/amiri@5.0.19/files/amiri-arabic-400-normal.woff',
+  // Alternative: raw GitHub from a font repository
+  'https://raw.githubusercontent.com/AbiSourceCode/AbiSourceData/main/fonts/amiri/Amiri-Regular.ttf',
+];
+
+const AMIRI_BOLD_CDN_SOURCES = [
+  'https://cdn.jsdelivr.net/npm/@fontsource/amiri@5.0.19/files/amiri-arabic-700-normal.woff',
+  'https://raw.githubusercontent.com/AbiSourceCode/AbiSourceData/main/fonts/amiri/Amiri-Bold.ttf',
+];
+
+// Noto Sans Arabic as fallback (broader Unicode support)
+const NOTO_ARABIC_CDN_SOURCES = [
+  'https://cdn.jsdelivr.net/npm/@fontsource/noto-sans-arabic@5.0.19/files/noto-sans-arabic-arabic-400-normal.woff',
+];
 
 /**
  * Convert ArrayBuffer to Base64 string
@@ -35,12 +51,22 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
  */
 async function fetchFontAsBase64(url: string): Promise<string | null> {
   try {
-    const response = await fetch(url);
+    const response = await fetch(url, {
+      // Add timeout and headers for better compatibility
+      headers: {
+        'Accept': 'font/woff, font/woff2, font/ttf, application/font-woff, application/font-woff2, */*',
+      },
+    });
     if (!response.ok) {
       console.warn(`[ArabicFont] Failed to fetch font from ${url}: ${response.status}`);
       return null;
     }
     const buffer = await response.arrayBuffer();
+    if (buffer.byteLength < 1000) {
+      // Font file too small, likely an error page
+      console.warn(`[ArabicFont] Font file suspiciously small from ${url}: ${buffer.byteLength} bytes`);
+      return null;
+    }
     return arrayBufferToBase64(buffer);
   } catch (error) {
     console.error('[ArabicFont] Error fetching font:', error);
@@ -49,35 +75,60 @@ async function fetchFontAsBase64(url: string): Promise<string | null> {
 }
 
 /**
- * Load Arabic fonts (Amiri) for jsPDF
+ * Try to fetch font from multiple CDN sources
+ */
+async function fetchFontFromSources(sources: string[]): Promise<string | null> {
+  for (const url of sources) {
+    console.log(`[ArabicFont] Trying font source: ${url.substring(0, 50)}...`);
+    const result = await fetchFontAsBase64(url);
+    if (result) {
+      console.log(`[ArabicFont] Successfully loaded from: ${url.substring(0, 50)}...`);
+      return result;
+    }
+  }
+  return null;
+}
+
+/**
+ * Load Arabic fonts (Amiri or Noto Sans Arabic fallback) for jsPDF
  * Returns true if fonts were loaded successfully
  */
 export async function loadArabicFonts(): Promise<boolean> {
   // Return cached result if already loading
   if (fontLoadPromise) {
-    await fontLoadPromise;
-    return amiriFontData !== null;
+    return fontLoadPromise;
   }
 
   // Start loading
   fontLoadPromise = (async () => {
-    console.log('[ArabicFont] Loading Arabic fonts...');
+    console.log('[ArabicFont] Loading Arabic fonts from multiple CDN sources...');
 
-    // Load regular font
-    amiriFontData = await fetchFontAsBase64(AMIRI_REGULAR_URL);
+    // Try loading Amiri font from multiple sources
+    amiriFontData = await fetchFontFromSources(AMIRI_CDN_SOURCES);
 
-    // Load bold font
-    amiriBoldFontData = await fetchFontAsBase64(AMIRI_BOLD_URL);
+    // If Amiri fails, try Noto Sans Arabic as fallback
+    if (!amiriFontData) {
+      console.log('[ArabicFont] Amiri failed, trying Noto Sans Arabic...');
+      amiriFontData = await fetchFontFromSources(NOTO_ARABIC_CDN_SOURCES);
+
+      if (amiriFontData) {
+        console.log('[ArabicFont] Using Noto Sans Arabic as fallback');
+      }
+    } else {
+      // Also try to load bold variant if regular succeeded
+      amiriBoldFontData = await fetchFontFromSources(AMIRI_BOLD_CDN_SOURCES);
+    }
 
     if (amiriFontData) {
       console.log('[ArabicFont] Arabic fonts loaded successfully');
+      return true;
     } else {
-      console.warn('[ArabicFont] Failed to load Arabic fonts, will use fallback');
+      console.warn('[ArabicFont] Failed to load Arabic fonts from all sources, Arabic text may not render correctly');
+      return false;
     }
   })();
 
-  await fontLoadPromise;
-  return amiriFontData !== null;
+  return fontLoadPromise;
 }
 
 /**
@@ -128,13 +179,31 @@ export function containsRTL(text: string): boolean {
 }
 
 /**
- * Reverse Arabic text for proper RTL display in jsPDF
- * jsPDF doesn't handle RTL natively, so we need to reverse the text
+ * Prepare Arabic text for jsPDF rendering
+ * Modern jsPDF with proper font support handles RTL automatically
+ * We just need to ensure the text is properly encoded
  */
 export function prepareArabicText(text: string): string {
   if (!text || !containsArabic(text)) return text;
 
-  // Split text into segments: Arabic and non-Arabic
+  // With proper Arabic font loaded, jsPDF should handle the text correctly
+  // We don't need to reverse the text - the font handles RTL rendering
+
+  // Just ensure we have clean Unicode text
+  // Remove any zero-width characters that might cause issues
+  return text
+    .replace(/[\u200B-\u200D\uFEFF]/g, '') // Remove zero-width chars
+    .normalize('NFC'); // Normalize Unicode form
+}
+
+/**
+ * Alternative: Reverse text for older jsPDF versions that don't handle RTL
+ * Use this if prepareArabicText doesn't work correctly
+ */
+export function reverseArabicText(text: string): string {
+  if (!text || !containsArabic(text)) return text;
+
+  // Split into Arabic and non-Arabic segments
   const segments: { text: string; isArabic: boolean }[] = [];
   let currentSegment = '';
   let currentIsArabic: boolean | null = null;
@@ -158,17 +227,16 @@ export function prepareArabicText(text: string): string {
     segments.push({ text: currentSegment, isArabic: currentIsArabic! });
   }
 
-  // Reverse Arabic segments for RTL display
-  // jsPDF renders text left-to-right, so we reverse Arabic portions
+  // Process segments - reverse only Arabic portions
   const processedSegments = segments.map(segment => {
     if (segment.isArabic) {
-      // Reverse the Arabic text
+      // Use proper Unicode bidi algorithm awareness
       return [...segment.text].reverse().join('');
     }
     return segment.text;
   });
 
-  // If the text is primarily Arabic, reverse the segment order too
+  // Reverse segment order for primarily Arabic text
   const arabicCharCount = text.replace(/[^\u0600-\u06FF]/g, '').length;
   const isMainlyArabic = arabicCharCount > text.length / 2;
 

@@ -1,5 +1,23 @@
 import type { SelectorStrategy } from '@/types/test';
 
+/**
+ * Escape special characters in CSS class names
+ * Handles Tailwind decimal classes like mb-1.5, space-y-1.5, etc.
+ */
+function escapeCssClassName(className: string): string {
+  // Escape dots that are followed by digits (Tailwind decimal classes)
+  // mb-1.5 → mb-1\.5
+  return className.replace(/\.(\d)/g, '\\.$$1');
+}
+
+/**
+ * Check if a class name contains decimal notation (like mb-1.5)
+ * These need special handling in CSS selectors
+ */
+function hasDecimalClass(className: string): boolean {
+  return /\.\d/.test(className);
+}
+
 export class SelectorGenerator {
   generate(element: Element): SelectorStrategy[] {
     const strategies: SelectorStrategy[] = [];
@@ -244,11 +262,18 @@ export class SelectorGenerator {
       return null;
     }
 
-    const selector = `${tag}.${classes.join('.')}`;
+    // Escape class names with decimal notation (like mb-1.5 → mb-1\.5)
+    const escapedClasses = classes.map(escapeCssClassName);
+    const selector = `${tag}.${escapedClasses.join('.')}`;
 
     // Verify uniqueness
-    if (document.querySelectorAll(selector).length === 1) {
-      return selector;
+    try {
+      if (document.querySelectorAll(selector).length === 1) {
+        return selector;
+      }
+    } catch {
+      // Invalid selector, skip
+      return null;
     }
 
     // Add parent context
@@ -257,12 +282,17 @@ export class SelectorGenerator {
       const parentTag = parent.tagName.toLowerCase();
       const parentClasses = Array.from(parent.classList)
         .filter((c) => this.isSemanticClass(c))
-        .slice(0, 1);
+        .slice(0, 1)
+        .map(escapeCssClassName);
 
       if (parentClasses.length > 0) {
         const contextSelector = `${parentTag}.${parentClasses[0]} > ${selector}`;
-        if (document.querySelectorAll(contextSelector).length === 1) {
-          return contextSelector;
+        try {
+          if (document.querySelectorAll(contextSelector).length === 1) {
+            return contextSelector;
+          }
+        } catch {
+          // Invalid selector, skip
         }
       }
     }
@@ -273,6 +303,9 @@ export class SelectorGenerator {
   private isSemanticClass(className: string): boolean {
     const nonSemanticPatterns = [
       /^[a-z]{1,2}-\d+$/, // Tailwind utility (e.g., p-4, m-2)
+      /^[a-z]+-\d+\.\d+$/, // Tailwind decimal utility (e.g., mb-1.5, space-y-0.5)
+      /^-?[a-z]+-\d+(\.\d+)?$/, // Negative Tailwind utilities (e.g., -mt-4)
+      /^[a-z]+-\[.+\]$/, // Tailwind arbitrary values (e.g., p-[10px])
       /^[a-f0-9]{6,}$/i, // Hash classes
       /^css-[a-z0-9]+$/i, // CSS-in-JS
       /^sc-[a-zA-Z]+$/, // Styled components
@@ -280,6 +313,12 @@ export class SelectorGenerator {
       /^_[a-zA-Z0-9]+$/, // CSS modules
       /^[a-z]+__[a-z]+--/, // BEM modifier noise
     ];
+
+    // Also skip classes with dots (they cause selector issues)
+    if (hasDecimalClass(className)) {
+      return false;
+    }
+
     return className.length > 2 && !nonSemanticPatterns.some((p) => p.test(className));
   }
 

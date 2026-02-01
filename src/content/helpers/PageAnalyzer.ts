@@ -24,6 +24,10 @@ export interface PageAnalysis {
     hasSignup: boolean;
     hasSearch: boolean;
     hasCheckout: boolean;
+    /** Page text direction: 'rtl' for Arabic/Hebrew, 'ltr' for English/etc */
+    direction: 'rtl' | 'ltr';
+    /** Detected language code (e.g., 'ar', 'en', 'he') */
+    language?: string;
   };
 }
 
@@ -209,6 +213,7 @@ export function analyzeCurrentPage(): PageAnalysis {
       hasSignup: false,
       hasSearch: false,
       hasCheckout: false,
+      direction: 'ltr',
     },
   };
 
@@ -531,7 +536,7 @@ function generateSelector(element: HTMLElement, _formIndex: number, _elementInde
       };
     }
 
-    // 8. Try stable class (single class, not CSS-in-JS)
+    // 8. Try stable class (single class, not CSS-in-JS or Tailwind utility)
     const tag = element.tagName.toLowerCase();
     if (element.className && typeof element.className === 'string') {
       const classes = element.className.split(/\s+/).filter(c => c.length > 0);
@@ -540,6 +545,11 @@ function generateSelector(element: HTMLElement, _formIndex: number, _elementInde
         if (/^(css|sc|emotion|styled)-[a-zA-Z0-9]+$/.test(c)) return false;
         if (/^[a-f0-9]{6,}$/.test(c)) return false;
         if (c.startsWith('_')) return false;
+        // Skip Tailwind decimal utility classes (e.g., mb-1.5, space-y-0.5)
+        // These contain dots which break CSS selectors
+        if (/\.\d/.test(c)) return false;
+        // Skip Tailwind utility classes (e.g., p-4, mt-2)
+        if (/^-?[a-z]{1,2}-\d+(\.\d+)?$/.test(c)) return false;
         return true;
       });
 
@@ -573,14 +583,59 @@ function generateSelector(element: HTMLElement, _formIndex: number, _elementInde
 }
 
 /**
+ * Detect page direction (RTL for Arabic/Hebrew pages, LTR otherwise)
+ */
+function detectPageDirection(): { direction: 'rtl' | 'ltr'; language?: string } {
+  try {
+    const html = document.documentElement;
+
+    // Check explicit dir attribute
+    const dirAttr = html.getAttribute('dir')?.toLowerCase();
+    if (dirAttr === 'rtl') {
+      return { direction: 'rtl', language: html.getAttribute('lang') || undefined };
+    }
+
+    // Check lang attribute for RTL languages
+    const lang = html.getAttribute('lang')?.toLowerCase();
+    const rtlLanguages = ['ar', 'he', 'fa', 'ur', 'ps', 'yi', 'arc', 'syr'];
+    if (lang) {
+      const langCode = lang.split('-')[0]; // e.g., 'ar-SA' -> 'ar'
+      if (rtlLanguages.includes(langCode)) {
+        return { direction: 'rtl', language: langCode };
+      }
+    }
+
+    // Check computed direction style
+    const computedDir = window.getComputedStyle(document.body).direction;
+    if (computedDir === 'rtl') {
+      return { direction: 'rtl', language: lang?.split('-')[0] };
+    }
+
+    // Check document.dir property
+    if (document.dir === 'rtl') {
+      return { direction: 'rtl', language: lang?.split('-')[0] };
+    }
+
+    return { direction: 'ltr', language: lang?.split('-')[0] };
+  } catch {
+    return { direction: 'ltr' };
+  }
+}
+
+/**
  * Detect common page patterns to suggest relevant tests
  */
 function detectPagePatterns(analysis: PageAnalysis): PageAnalysis['metadata'] {
+  // Detect page direction first
+  const { direction, language } = detectPageDirection();
+
   const metadata = {
     hasLogin: false,
     hasSignup: false,
     hasSearch: false,
     hasCheckout: false,
+    direction,
+    language,
   };
 
   try {
@@ -688,6 +743,13 @@ export function getSimplifiedPageContext(): string {
     if (analysis.metadata.hasSignup) context += `Detected: Signup page\n`;
     if (analysis.metadata.hasSearch) context += `Detected: Search functionality\n`;
     if (analysis.metadata.hasCheckout) context += `Detected: Checkout/Payment page\n`;
+
+    // Add direction info
+    context += `\nPage Direction: ${analysis.metadata.direction.toUpperCase()}`;
+    if (analysis.metadata.language) {
+      context += ` (${analysis.metadata.language})`;
+    }
+    context += '\n';
 
     return context;
   } catch (e) {

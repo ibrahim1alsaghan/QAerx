@@ -81,10 +81,14 @@ export class AIService {
 
   /**
    * Generate realistic test data based on test steps and variable names
+   * @param steps - The test steps to analyze
+   * @param count - Number of data sets to generate
+   * @param options - Generation options including direction for localization
    */
   async generateTestData(
     steps: UIStep[],
-    count: number = 3
+    count: number = 3,
+    options: { direction?: 'rtl' | 'ltr'; language?: string } = {}
   ): Promise<Record<string, string>[]> {
     if (!this.client) {
       throw new Error('AIService not initialized');
@@ -115,7 +119,21 @@ export class AIService {
       })
       .join('\n');
 
-    const systemMessage = `You are a test data generator for automated testing. Generate realistic, diverse test data based on variable names and test context. Consider field types, validation rules, and real-world user scenarios.`;
+    // Determine localization requirements based on direction
+    const isRTL = options.direction === 'rtl';
+    const localeHint = isRTL
+      ? `
+
+LOCALIZATION (Arabic/RTL page detected):
+- For names: Use Arabic names (أحمد، محمد، سارة، فاطمة، خالد، نورة, etc.)
+- For phone numbers: Use Saudi format +966 5XX XXX XXXX
+- For addresses/cities: Use Arabic text (الرياض، جدة، الدمام, etc.)
+- For generic text fields: Use Arabic text
+- KEEP IN ENGLISH: email addresses, usernames, passwords, URLs, technical IDs
+- Example: firstName: "محمد", lastName: "الأحمد", email: "mohammed@example.com", phone: "+966512345678"`
+      : '';
+
+    const systemMessage = `You are a test data generator for automated testing. Generate realistic, diverse test data based on variable names and test context. Consider field types, validation rules, and real-world user scenarios.${isRTL ? ' You must generate Arabic/localized data for RTL pages as specified.' : ''}`;
 
     const userMessage = `Generate ${count} unique test data sets for these variables:
 
@@ -131,7 +149,7 @@ Requirements:
 - For emails: use real-looking domains (gmail.com, company.com, etc.)
 - For passwords: include mix of letters, numbers, special chars
 - For names: use diverse, realistic names
-- For numbers: use appropriate formats (phone, zip, etc.)
+- For numbers: use appropriate formats (phone, zip, etc.)${localeHint}
 
 Example format:
 [{"variable1": "value1", "variable2": "value2"}]`;
@@ -154,14 +172,46 @@ Example format:
         throw new Error('Empty response from AI');
       }
 
-      // Parse response
-      const parsed = JSON.parse(content);
+      // Parse response with robust handling
+      let parsed;
+      try {
+        parsed = JSON.parse(content);
+      } catch (parseError) {
+        console.error('[AIService] Failed to parse JSON:', content);
+        throw new Error('AI returned invalid JSON. Please try again.');
+      }
 
-      // Handle both array and object with array property
-      let dataArray = Array.isArray(parsed) ? parsed : parsed.data || parsed.dataSets || [];
+      // Handle various response formats from OpenAI
+      let dataArray: any[] = [];
+
+      if (Array.isArray(parsed)) {
+        // Direct array: [{...}, {...}]
+        dataArray = parsed;
+      } else if (typeof parsed === 'object' && parsed !== null) {
+        // Object with array property: { data: [...] } or { dataSets: [...] }
+        // Try common property names
+        const arrayKeys = ['data', 'dataSets', 'datasets', 'results', 'items', 'testData'];
+        for (const key of arrayKeys) {
+          if (Array.isArray(parsed[key])) {
+            dataArray = parsed[key];
+            break;
+          }
+        }
+
+        // If still empty, try to find any array property
+        if (dataArray.length === 0) {
+          for (const value of Object.values(parsed)) {
+            if (Array.isArray(value) && value.length > 0) {
+              dataArray = value as any[];
+              break;
+            }
+          }
+        }
+      }
 
       if (!Array.isArray(dataArray) || dataArray.length === 0) {
-        throw new Error('AI returned invalid data format');
+        console.error('[AIService] Invalid response format:', parsed);
+        throw new Error('AI returned invalid data format. Expected an array of data sets.');
       }
 
       // Validate that all variables are present in each data set
@@ -182,17 +232,29 @@ Example format:
 
   /**
    * Generate test data with scenarios (best case, worst case, edge cases)
+   *
+   * Default is 3 scenarios (Standard):
+   * - 1 Best Case (happy path)
+   * - 1 Worst Case (invalid/security)
+   * - 1 Edge Case (boundaries)
+   *
+   * Options allow for more comprehensive testing:
+   * - Quick (1): Just best case
+   * - Standard (3): Best + Worst + Edge
+   * - Comprehensive (5): Multiple of each type
    */
   async generateScenarioTestData(
     steps: UIStep[],
-    options: { bestCase?: number; worstCase?: number; edgeCase?: number; boundary?: number } = {}
+    options: { bestCase?: number; worstCase?: number; edgeCase?: number; boundary?: number; direction?: 'rtl' | 'ltr'; language?: string } = {}
   ): Promise<{ dataSets: Record<string, string>[]; scenarios: ('best-case' | 'worst-case' | 'edge-case' | 'boundary')[] }> {
     if (!this.client) {
       throw new Error('AIService not initialized');
     }
 
-    const { bestCase = 1, worstCase = 2, edgeCase = 1, boundary = 1 } = options;
+    // Default to 3 scenarios (Standard): 1 best, 1 worst, 1 edge
+    const { bestCase = 1, worstCase = 1, edgeCase = 1, boundary = 0, direction, language: _language } = options;
     const totalCount = bestCase + worstCase + edgeCase + boundary;
+    const isRTL = direction === 'rtl';
 
     // Extract variable names from steps
     let variables = this.extractVariablesFromSteps(steps);
@@ -210,9 +272,22 @@ Example format:
       })
       .join('\n');
 
-    const systemMessage = `You are a QA test data expert. Generate comprehensive test data covering different scenarios to ensure thorough testing coverage.`;
+    const systemMessage = `You are a QA test data expert. Generate comprehensive test data covering different scenarios to ensure thorough testing coverage.${isRTL ? ' Generate Arabic/localized data for RTL pages as specified.' : ''}`;
 
-    const userMessage = `Generate test data sets for these variables: ${variables.join(', ')}
+    // Localization hint for RTL pages
+    const localeHint = isRTL
+      ? `
+
+LOCALIZATION (Arabic/RTL page detected):
+- For names: Use Arabic names (أحمد، محمد، سارة، فاطمة، خالد، نورة)
+- For phone numbers: Use Saudi format +966 5XX XXX XXXX
+- For addresses/cities: Use Arabic text (الرياض، جدة، الدمام)
+- For generic text fields: Use Arabic text
+- KEEP IN ENGLISH: email addresses, usernames, passwords, URLs
+`
+      : '';
+
+    const userMessage = `Generate test data sets for these variables: ${variables.join(', ')}${localeHint}
 
 Test context:
 ${stepDescriptions}
@@ -269,11 +344,44 @@ Return ONLY valid JSON in this exact format:
         throw new Error('Empty response from AI');
       }
 
-      const parsed = JSON.parse(content);
-      const rawDataSets = parsed.dataSets || parsed.data || [];
+      // Parse response with robust handling
+      let parsed;
+      try {
+        parsed = JSON.parse(content);
+      } catch (parseError) {
+        console.error('[AIService] Failed to parse scenario JSON:', content);
+        throw new Error('AI returned invalid JSON for scenarios. Please try again.');
+      }
+
+      // Extract data array from various response formats
+      let rawDataSets: any[] = [];
+
+      if (Array.isArray(parsed)) {
+        rawDataSets = parsed;
+      } else if (typeof parsed === 'object' && parsed !== null) {
+        // Try common property names
+        const arrayKeys = ['dataSets', 'datasets', 'data', 'results', 'scenarios'];
+        for (const key of arrayKeys) {
+          if (Array.isArray(parsed[key])) {
+            rawDataSets = parsed[key];
+            break;
+          }
+        }
+
+        // If still empty, find any array property
+        if (rawDataSets.length === 0) {
+          for (const value of Object.values(parsed)) {
+            if (Array.isArray(value) && value.length > 0) {
+              rawDataSets = value as any[];
+              break;
+            }
+          }
+        }
+      }
 
       if (!Array.isArray(rawDataSets) || rawDataSets.length === 0) {
-        throw new Error('AI returned invalid data format');
+        console.error('[AIService] Invalid scenario response format:', parsed);
+        throw new Error('AI returned invalid data format for scenarios.');
       }
 
       // Separate data and scenarios
@@ -300,28 +408,46 @@ Return ONLY valid JSON in this exact format:
   }
 
   /**
-   * Analyze current page and suggest test cases
+   * Get page type hint from page context for better AI suggestions
+   */
+  private getPageTypeHint(pageContext: string): string {
+    if (pageContext.includes('Detected: Login')) return 'This is a LOGIN page. Focus only on login flow.';
+    if (pageContext.includes('Detected: Signup')) return 'This is a SIGNUP/REGISTRATION page. Focus only on signup flow.';
+    if (pageContext.includes('Detected: Search')) return 'This page has SEARCH functionality. Focus on search flow.';
+    if (pageContext.includes('Detected: Checkout')) return 'This is a CHECKOUT/PAYMENT page. Focus on checkout flow.';
+    return 'Analyze the form fields to determine the primary purpose of this page.';
+  }
+
+  /**
+   * Analyze current page and suggest test cases - focused on main flow only
    */
   async analyzePageAndSuggestTests(pageContext: string): Promise<UIStep[]> {
     if (!this.client) {
       throw new Error('AIService not initialized');
     }
 
-    const systemMessage = `You are a QA test expert. Analyze web pages and suggest comprehensive test scenarios. Focus on critical user flows, edge cases, and validation tests.`;
+    const pageTypeHint = this.getPageTypeHint(pageContext);
 
-    const userMessage = `Analyze this page and suggest 5-10 important test steps to cover key functionality:
+    const systemMessage = `You are a focused QA expert. Your job is to identify a page's PRIMARY purpose and suggest ONLY the essential test steps for that main user flow. Never suggest unnecessary or tangential tests. Keep it simple and focused.`;
 
+    const userMessage = `Analyze this page and generate a focused test for its MAIN purpose only:
+
+${pageTypeHint}
+
+Page Context:
 ${pageContext}
 
-Requirements:
-- Suggest practical, executable test steps
-- Include form validation, navigation, and assertions
-- Use actual selectors from the page
-- Consider positive and negative test cases
-- Return ONLY valid JSON
+STRICT Rules:
+1. Identify the page's PRIMARY purpose (login, signup, search, checkout, or form entry)
+2. Generate ONLY 3-5 steps that test this main flow
+3. Steps should follow: fill required fields → submit action
+4. Do NOT suggest steps for navigation links, secondary buttons, footer links, or unrelated features
+5. Do NOT suggest "wait" or "verify" steps unless absolutely necessary
+6. Use ONLY the selectors provided in the page context above
+7. Return ONLY valid JSON
 
 Format:
-{"steps": [{"name": "Step name", "type": "click|type|navigate|waitForElement", "selector": "CSS selector", "text": "text to type (if type action)", "description": "Why this test is important"}]}`;
+{"pageType": "login|signup|search|checkout|form", "steps": [{"name": "Step name", "type": "click|type|select", "selector": "exact CSS selector from context", "text": "text to type (only for type action)"}]}`;
 
     try {
       const response = await this.makeRequest(async () => {
@@ -331,7 +457,7 @@ Format:
             { role: 'system', content: systemMessage },
             { role: 'user', content: userMessage },
           ],
-          temperature: 0.7,
+          temperature: 0.5, // Lower temperature for more focused output
           response_format: { type: 'json_object' },
         });
       });
@@ -348,8 +474,19 @@ Format:
         throw new Error('AI returned invalid format');
       }
 
+      // Filter out steps without valid selectors or with invalid action types
+      const validSuggestions = suggestions.filter((s: any) =>
+        s.selector &&
+        s.selector.length > 0 &&
+        s.type &&
+        ['click', 'type', 'select', 'check', 'uncheck'].includes(s.type)
+      );
+
+      // Limit to 5 steps maximum
+      const limitedSuggestions = validSuggestions.slice(0, 5);
+
       // Convert AI suggestions to UIStep objects
-      const steps: UIStep[] = suggestions.map((suggestion: any, index: number) => {
+      const steps: UIStep[] = limitedSuggestions.map((suggestion: any, index: number) => {
         const step: UIStep = {
           id: crypto.randomUUID(),
           type: 'ui',
@@ -377,6 +514,133 @@ Format:
     } catch (error) {
       this.handleError(error);
       throw error;
+    }
+  }
+
+  /**
+   * Enhance collected steps with AI - improve variable names based on field semantics
+   */
+  async enhanceCollectedSteps(
+    steps: UIStep[],
+    pageMetadata: { hasLogin: boolean; hasSignup: boolean; hasSearch: boolean; hasCheckout: boolean }
+  ): Promise<UIStep[]> {
+    if (!this.client) {
+      // Return steps unchanged if AI not available
+      return steps;
+    }
+
+    // Extract current variable names from steps
+    const variableMap = new Map<string, { stepIndex: number; fieldType: string; stepName: string }>();
+
+    steps.forEach((step, index) => {
+      if (step.action.type === 'type' || step.action.type === 'select') {
+        const action = step.action as { text?: string; value?: string };
+        const text = action.text || action.value || '';
+        const match = text.match(/\{\{(\w+)\}\}/);
+        if (match) {
+          variableMap.set(match[1], {
+            stepIndex: index,
+            fieldType: step.action.type,
+            stepName: step.name,
+          });
+        }
+      }
+    });
+
+    // If no variables to enhance, return as-is
+    if (variableMap.size === 0) {
+      return steps;
+    }
+
+    // Determine page type
+    let pageType = 'form';
+    if (pageMetadata.hasLogin) pageType = 'login';
+    else if (pageMetadata.hasSignup) pageType = 'signup';
+    else if (pageMetadata.hasSearch) pageType = 'search';
+    else if (pageMetadata.hasCheckout) pageType = 'checkout';
+
+    // Build step summary for AI
+    const stepSummary = Array.from(variableMap.entries())
+      .map(([varName, info]) => `- ${info.stepName} (${info.fieldType}): {{${varName}}}`)
+      .join('\n');
+
+    const currentVars = Array.from(variableMap.keys()).map(v => `{{${v}}}`).join(', ');
+
+    const systemMessage = `You are a QA expert. Improve variable names in test steps to be semantic and descriptive.`;
+
+    const userMessage = `These test steps were collected from a ${pageType} page:
+${stepSummary}
+
+Current variables: ${currentVars}
+
+Suggest better variable names that describe what data each field needs.
+Rules:
+- Use camelCase (e.g., firstName, emailAddress)
+- Be descriptive based on the step name (e.g., "Enter Email" → email, "Enter Password" → password)
+- Keep names short (max 20 chars)
+- For login pages: prefer email, password, username
+- For signup pages: prefer firstName, lastName, email, password, confirmPassword
+- Return ONLY valid JSON
+
+Format: {"variables": {"currentVarName": "newVarName", ...}}`;
+
+    try {
+      const response = await this.makeRequest(async () => {
+        return await this.client!.chat.completions.create({
+          model: 'gpt-4o-mini',
+          messages: [
+            { role: 'system', content: systemMessage },
+            { role: 'user', content: userMessage },
+          ],
+          temperature: 0.3, // Very low for consistent naming
+          response_format: { type: 'json_object' },
+        });
+      });
+
+      const content = response.choices[0]?.message?.content;
+      if (!content) {
+        return steps; // Return unchanged if no response
+      }
+
+      const parsed = JSON.parse(content);
+      const newVariables = parsed.variables || {};
+
+      // Apply variable name changes to steps
+      const enhancedSteps = steps.map((step) => {
+        const newStep = { ...step };
+
+        // Update action text/value with new variable names
+        if (step.action.type === 'type') {
+          const action = step.action as { type: 'type'; text: string };
+          let newText = action.text;
+          for (const [oldVar, newVar] of Object.entries(newVariables)) {
+            newText = newText.replace(`{{${oldVar}}}`, `{{${newVar}}}`);
+          }
+          newStep.action = { ...action, text: newText };
+
+          // Also update step name if it contains the old variable
+          for (const [oldVar, newVar] of Object.entries(newVariables)) {
+            if (step.name.toLowerCase().includes(oldVar.toLowerCase())) {
+              newStep.name = step.name.replace(new RegExp(oldVar, 'gi'), String(newVar));
+            }
+          }
+        } else if (step.action.type === 'select') {
+          const action = step.action as { type: 'select'; value: string };
+          let newValue = action.value;
+          for (const [oldVar, newVar] of Object.entries(newVariables)) {
+            newValue = newValue.replace(`{{${oldVar}}}`, `{{${newVar}}}`);
+          }
+          newStep.action = { ...action, value: newValue };
+        }
+
+        return newStep as UIStep;
+      });
+
+      return enhancedSteps;
+    } catch (error) {
+      // On error, return steps unchanged
+      console.warn('AI enhancement failed, returning original steps:', error);
+      return steps;
     }
   }
 

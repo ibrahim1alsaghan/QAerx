@@ -44,6 +44,8 @@ export interface TestDataSource {
 }
 
 // Step types
+// Note: APIStep is defined but not yet implemented in the UI/playback engine
+// TODO: Implement API testing feature in v2.0
 export type Step = UIStep | APIStep;
 
 export interface BaseStep {

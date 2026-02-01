@@ -22,6 +22,7 @@ interface TestRunData {
     status: 'passed' | 'failed';
     error?: string;
     duration?: number;
+    screenshot?: string; // Base64 screenshot on failure
     pageResponse?: string; // Captured system response (login success/fail, etc.)
     aiValidation?: AIValidationData; // AI validation details
   }>;
@@ -224,12 +225,14 @@ export class PDFReportService {
       styles: {
         fontSize: 8,
         cellPadding: 3,
+        font: this.hasArabicFont ? 'Amiri' : 'helvetica',
       },
       headStyles: {
         fillColor: [16, 185, 129],
         textColor: [255, 255, 255],
         fontStyle: 'bold',
         fontSize: 8,
+        font: 'helvetica', // Keep headers in Helvetica
       },
       alternateRowStyles: {
         fillColor: [249, 250, 251],
@@ -253,6 +256,14 @@ export class PDFReportService {
           } else if (data.cell.text[0] === 'FAIL') {
             data.cell.styles.textColor = [239, 68, 68];
             data.cell.styles.fontStyle = 'bold';
+          }
+        }
+        // Use Arabic font for cells containing Arabic text
+        if (data.section === 'body' && this.hasArabicFont) {
+          const cellText = data.cell.text.join('');
+          if (containsArabic(cellText)) {
+            data.cell.styles.font = 'Amiri';
+            data.cell.styles.halign = 'right'; // RTL alignment
           }
         }
       },
@@ -374,12 +385,14 @@ export class PDFReportService {
         styles: {
           fontSize: 8,
           cellPadding: 2,
+          font: this.hasArabicFont ? 'Amiri' : 'helvetica',
         },
         headStyles: {
           fillColor: [243, 244, 246],
           textColor: [75, 85, 99],
           fontStyle: 'bold',
           fontSize: 8,
+          font: 'helvetica',
         },
         columnStyles: {
           0: { cellWidth: 8, halign: 'center' },
@@ -408,6 +421,14 @@ export class PDFReportService {
               data.cell.styles.textColor = [34, 197, 94];
             } else if (stepResult?.status === 'failed') {
               data.cell.styles.textColor = [185, 28, 28];
+            }
+          }
+          // Handle Arabic text
+          if (data.section === 'body' && this.hasArabicFont) {
+            const cellText = data.cell.text.join('');
+            if (containsArabic(cellText)) {
+              data.cell.styles.font = 'Amiri';
+              data.cell.styles.halign = 'right';
             }
           }
         },
@@ -463,11 +484,13 @@ export class PDFReportService {
         styles: {
           fontSize: 8,
           cellPadding: 3,
+          font: this.hasArabicFont ? 'Amiri' : 'helvetica',
         },
         headStyles: {
           fillColor: [59, 130, 246],
           textColor: [255, 255, 255],
           fontStyle: 'bold',
+          font: 'helvetica',
         },
         alternateRowStyles: {
           fillColor: [249, 250, 251],
@@ -482,6 +505,14 @@ export class PDFReportService {
             } else if (data.cell.text[0] === 'FAIL') {
               data.cell.styles.textColor = [239, 68, 68];
               data.cell.styles.fontStyle = 'bold';
+            }
+          }
+          // Handle Arabic text in data values
+          if (data.section === 'body' && this.hasArabicFont) {
+            const cellText = data.cell.text.join('');
+            if (containsArabic(cellText)) {
+              data.cell.styles.font = 'Amiri';
+              data.cell.styles.halign = 'right';
             }
           }
         },
@@ -530,11 +561,13 @@ export class PDFReportService {
         styles: {
           fontSize: 8,
           cellPadding: 3,
+          font: this.hasArabicFont ? 'Amiri' : 'helvetica',
         },
         headStyles: {
           fillColor: [185, 28, 28],
           textColor: [255, 255, 255],
           fontStyle: 'bold',
+          font: 'helvetica',
         },
         alternateRowStyles: {
           fillColor: [254, 242, 242],
@@ -545,7 +578,77 @@ export class PDFReportService {
           2: { cellWidth: 40, fontSize: 7 },
           3: { cellWidth: 65, fontSize: 7 },
         },
+        didParseCell: (data) => {
+          // Handle Arabic text
+          if (data.section === 'body' && this.hasArabicFont) {
+            const cellText = data.cell.text.join('');
+            if (containsArabic(cellText)) {
+              data.cell.styles.font = 'Amiri';
+              data.cell.styles.halign = 'right';
+            }
+          }
+        },
       });
+
+      // ==================== FAILURE SCREENSHOTS SECTION ====================
+      const failuresWithScreenshots = failures.filter((f) => f.screenshot);
+      if (failuresWithScreenshots.length > 0) {
+        yPosition = (doc as any).lastAutoTable.finalY + 20;
+
+        if (yPosition > pageHeight - 100) {
+          doc.addPage();
+          yPosition = 20;
+        }
+
+        doc.setFontSize(14);
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(185, 28, 28);
+        doc.text('Failure Screenshots', 20, yPosition);
+
+        yPosition += 5;
+        doc.setDrawColor(185, 28, 28);
+        doc.line(20, yPosition, 70, yPosition);
+
+        yPosition += 10;
+
+        for (const failure of failuresWithScreenshots) {
+          const step = steps.find((s) => s.id === failure.stepId);
+
+          // Check if we need a new page
+          if (yPosition > pageHeight - 120) {
+            doc.addPage();
+            yPosition = 20;
+          }
+
+          // Screenshot caption
+          doc.setFontSize(10);
+          doc.setFont('helvetica', 'bold');
+          doc.setTextColor(75, 85, 99);
+          doc.text(`Step: ${step?.name || 'Unknown'} (Data Set ${failure.dataSetIndex + 1})`, 20, yPosition);
+
+          yPosition += 5;
+
+          // Add screenshot image
+          try {
+            const imgWidth = pageWidth - 40;
+            const imgHeight = 80; // Fixed height, aspect ratio may vary
+
+            doc.addImage(failure.screenshot!, 'PNG', 20, yPosition, imgWidth, imgHeight);
+            yPosition += imgHeight + 10;
+
+            // Add error caption below screenshot
+            doc.setFontSize(8);
+            doc.setFont('helvetica', 'normal');
+            doc.setTextColor(185, 28, 28);
+            doc.text(`Error: ${this.truncateString(failure.error || 'Unknown', 100)}`, 20, yPosition);
+
+            yPosition += 15;
+          } catch (imgError) {
+            console.warn('[PDFReport] Failed to add screenshot image:', imgError);
+            yPosition += 10;
+          }
+        }
+      }
     }
 
     // ==================== FOOTER ON ALL PAGES ====================

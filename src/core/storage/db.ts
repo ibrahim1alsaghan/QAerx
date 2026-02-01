@@ -31,6 +31,13 @@ export class QAerxDatabase extends Dexie {
       credentials: 'id, name, domain',
       screenshots: 'id, testRunId, stepId, timestamp, isBaseline, [testId+isBaseline]',
       settings: 'id',
+    }).upgrade(tx => {
+      // Migration: Add default order value to existing suites
+      return tx.table('suites').toCollection().modify(suite => {
+        if (suite.order === undefined) {
+          suite.order = 0;
+        }
+      });
     });
   }
 }

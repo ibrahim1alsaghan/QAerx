@@ -4,16 +4,32 @@ import { getElementPicker } from './picker/ElementPicker';
 import { getElementHighlighter } from './highlighter/ElementHighlighter';
 import { getSimplifiedPageContext, analyzeCurrentPage } from './helpers/PageAnalyzer';
 
-// Initialize engines
-const recorder = getRecorder();
-const playback = getPlayback();
-const elementPicker = getElementPicker();
-const highlighter = getElementHighlighter();
+// Log immediately when script starts executing
+console.log('[QAerx] Content script starting...');
+
+// Initialize engines with error handling
+let recorder: ReturnType<typeof getRecorder>;
+let playback: ReturnType<typeof getPlayback>;
+let elementPicker: ReturnType<typeof getElementPicker>;
+let highlighter: ReturnType<typeof getElementHighlighter>;
+
+try {
+  recorder = getRecorder();
+  playback = getPlayback();
+  elementPicker = getElementPicker();
+  highlighter = getElementHighlighter();
+  console.log('[QAerx] Engines initialized successfully');
+} catch (error) {
+  console.error('[QAerx] Failed to initialize engines:', error);
+}
 
 // Listen for messages from background/popup
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  console.log('[QAerx] Received message:', message.type);
+
   switch (message.type) {
     case 'ping':
+      console.log('[QAerx] Ping received, responding...');
       sendResponse({ success: true, loaded: true });
       return false;
 
@@ -154,4 +170,4 @@ chrome.runtime.sendMessage({ type: 'content-script:ready' }).catch(() => {
   // Ignore errors if background is not ready yet
 });
 
-console.log('[QAerx] Content script initialized');
+console.log('[QAerx] Content script fully initialized and ready for messages');
