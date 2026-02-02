@@ -1,6 +1,6 @@
 import OpenAI from 'openai';
 import type { UIStep, SelectorStrategy } from '@/types/test';
-import type { SelectorHealingSuggestion } from '@/types/result';
+import type { SelectorHealingSuggestion, FailureAnalysisRequest, FailureAnalysisResult } from '@/types/result';
 import { SettingsRepository } from '../storage/repositories/SettingsRepository';
 
 interface DOMContext {
@@ -983,6 +983,139 @@ Return ONLY valid JSON:
         errorMessage: result.errorMessage ?? null,
         successMessage: result.successMessage ?? null,
         confidence: result.confidence ?? 0.5,
+      };
+    } catch (error) {
+      this.handleError(error);
+      throw error;
+    }
+  }
+
+/**
+   * Analyze test failure and provide root cause analysis with suggested fixes
+   * Includes Arabic explanations and category classification
+   */
+  async analyzeFailure(request: FailureAnalysisRequest): Promise<FailureAnalysisResult> {
+    if (!this.client) {
+      throw new Error('AIService not initialized');
+    }
+
+    const systemMessage = `You are an expert QA test failure analyst who provides bilingual analysis (English + Arabic).
+
+CATEGORIES (pick ONE that best fits):
+- selector: Element not found, selector changed, DOM structure issues
+- authentication: Login failed, wrong credentials, session expired
+- timing: Timeout, slow page load, element not ready
+- data: Invalid test data, wrong input values, validation errors
+- network: Connection error, API failure, CORS issues
+- unknown: Cannot determine the cause
+
+Your job is to:
+1. Classify the failure into one category
+2. Explain the root cause in BOTH English and Arabic
+3. Provide actionable fixes in BOTH English and Arabic
+4. Suggest alternative selectors if applicable`;
+
+    const userMessage = `Analyze this test step failure:
+
+STEP: "${request.stepName}"
+ACTION: ${request.actionType}
+${request.selector ? `SELECTOR: ${request.selector}` : ''}
+${request.expectedResult ? `EXPECTED: ${request.expectedResult}` : ''}
+
+ERROR TYPE: ${request.errorType}
+ERROR MESSAGE: ${request.errorMessage}
+
+PAGE URL: ${request.pageUrl}
+${request.pageTitle ? `PAGE TITLE: ${request.pageTitle}` : ''}
+
+${request.domSnapshot ? `RELEVANT DOM (simplified):
+${this.optimizeDOMSnapshot(request.domSnapshot)}` : ''}
+
+Return ONLY valid JSON in this exact format:
+{
+  "category": "selector|authentication|timing|data|network|unknown",
+  "possibleCauses": [
+    {
+      "cause": "Brief cause title in English",
+      "causeArabic": "السبب بالعربي",
+      "probability": "high|medium|low",
+      "explanation": "Detailed explanation in English"
+    }
+  ],
+  "suggestedFixes": [
+    {
+      "fix": "Fix title in English",
+      "fixArabic": "الحل بالعربي",
+      "description": "How to fix in English",
+      "code": "optional code/selector",
+      "autoApplicable": true|false
+    }
+  ],
+  "alternativeSelectors": [
+    {"selector": "new selector", "confidence": 0.0-1.0, "explanation": "why this selector"}
+  ],
+  "summary": "Brief one-line summary in English",
+  "summaryArabic": "ملخص قصير بالعربي",
+  "confidence": 0.0-1.0
+}`;
+
+    try {
+      const response = await this.makeRequest(async () => {
+        return await this.client!.chat.completions.create({
+          model: 'gpt-4o-mini',
+          messages: [
+            { role: 'system', content: systemMessage },
+            { role: 'user', content: userMessage },
+          ],
+          temperature: 0.4,
+          response_format: { type: 'json_object' },
+        });
+      });
+
+      const content = response.choices[0]?.message?.content;
+      if (!content) {
+        throw new Error('Empty response from AI');
+      }
+
+      const result = JSON.parse(content);
+
+      // Map category to label with emoji
+      const categoryLabels: Record<string, string> = {
+        selector: '🔍 Selector Issue',
+        authentication: '🔐 Authentication Error',
+        timing: '⏱️ Timing Issue',
+        data: '📝 Data Problem',
+        network: '🌐 Network Error',
+        unknown: '❓ Unknown Issue',
+      };
+
+      const category = result.category || 'unknown';
+
+      // Validate and normalize the response
+      return {
+        category,
+        categoryLabel: categoryLabels[category] || categoryLabels.unknown,
+        possibleCauses: (result.possibleCauses || []).map((c: any) => ({
+          cause: c.cause || 'Unknown cause',
+          causeArabic: c.causeArabic || 'سبب غير معروف',
+          probability: c.probability || 'medium',
+          explanation: c.explanation || '',
+        })),
+        suggestedFixes: (result.suggestedFixes || []).map((f: any) => ({
+          fix: f.fix || 'Unknown fix',
+          fixArabic: f.fixArabic || 'حل غير معروف',
+          description: f.description || '',
+          code: f.code,
+          autoApplicable: f.autoApplicable ?? false,
+        })),
+        alternativeSelectors: (result.alternativeSelectors || []).map((s: any) => ({
+          selector: s.selector || '',
+          confidence: s.confidence ?? 0.5,
+          explanation: s.explanation || '',
+        })),
+        summary: result.summary || 'Analysis complete',
+        summaryArabic: result.summaryArabic || 'تم التحليل',
+        confidence: result.confidence ?? 0.7,
       };
     } catch (error) {
       this.handleError(error);

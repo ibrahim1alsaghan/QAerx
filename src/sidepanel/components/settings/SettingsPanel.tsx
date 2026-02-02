@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Key, Cpu, Trash2, Info } from 'lucide-react';
+import { Key, Trash2, Info } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { SettingsRepository } from '@/core/storage/repositories';
 import { db } from '@/core/storage/db';
@@ -9,7 +9,6 @@ export function SettingsPanel() {
   const { settings, refreshSettings } = useApp();
   const [apiKey, setApiKey] = useState('');
   const [isApiKeyVisible, setIsApiKeyVisible] = useState(false);
-  const [parallelLimit, setParallelLimit] = useState(settings?.parallelLimit || 2);
 
   const handleSaveApiKey = async () => {
     if (!apiKey.trim()) {
@@ -37,16 +36,6 @@ export function SettingsPanel() {
       toast.success('API key removed');
     } catch (error) {
       toast.error('Failed to remove API key');
-    }
-  };
-
-  const handleSaveParallelLimit = async () => {
-    try {
-      await SettingsRepository.setParallelLimit(parallelLimit);
-      await refreshSettings();
-      toast.success('Settings saved');
-    } catch (error) {
-      toast.error('Failed to save settings');
     }
   };
 
@@ -108,39 +97,6 @@ export function SettingsPanel() {
               </div>
             </div>
           )}
-        </div>
-      </section>
-
-      {/* Execution Settings */}
-      <section className="card">
-        <div className="card-header">
-          <h3 className="font-medium text-dark-100 flex items-center gap-2">
-            <Cpu className="w-4 h-4" />
-            Execution Settings
-          </h3>
-        </div>
-        <div className="card-body space-y-4">
-          <div>
-            <label className="block text-sm text-dark-400 mb-2">
-              Parallel Test Limit
-            </label>
-            <p className="text-xs text-dark-500 mb-2">
-              Maximum number of tests to run simultaneously
-            </p>
-            <div className="flex items-center gap-2">
-              <input
-                type="number"
-                min="1"
-                max="10"
-                value={parallelLimit}
-                onChange={(e) => setParallelLimit(parseInt(e.target.value) || 1)}
-                className="input w-20"
-              />
-              <button onClick={handleSaveParallelLimit} className="btn btn-sm btn-secondary">
-                Save
-              </button>
-            </div>
-          </div>
         </div>
       </section>
 

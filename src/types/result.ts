@@ -116,3 +116,45 @@ export interface LogEntry {
   message: string;
   data?: unknown;
 }
+
+// AI Failure Analysis types
+export type FailureCategory = 'selector' | 'authentication' | 'timing' | 'data' | 'network' | 'unknown';
+
+export interface FailureAnalysisRequest {
+  stepName: string;
+  actionType: string;
+  selector?: string;
+  expectedResult?: string;
+  errorMessage: string;
+  errorType: StepError['type'];
+  pageUrl: string;
+  pageTitle?: string;
+  domSnapshot?: string;
+  screenshotDataUrl?: string;
+}
+
+export interface FailureAnalysisResult {
+  category: FailureCategory;
+  categoryLabel: string; // e.g., "🔍 Selector Issue" or "🔐 Authentication Error"
+  possibleCauses: Array<{
+    cause: string;
+    causeArabic: string; // Arabic explanation
+    probability: 'high' | 'medium' | 'low';
+    explanation: string;
+  }>;
+  suggestedFixes: Array<{
+    fix: string;
+    fixArabic: string; // Arabic fix description
+    description: string;
+    code?: string;
+    autoApplicable: boolean;
+  }>;
+  alternativeSelectors?: Array<{
+    selector: string;
+    confidence: number;
+    explanation: string;
+  }>;
+  summary: string;
+  summaryArabic: string; // Arabic summary
+  confidence: number;
+}

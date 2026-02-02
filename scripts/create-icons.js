@@ -1,13 +1,27 @@
-// Create simple solid color PNG icons
+// Create QAerx logo icons - Navy blue circle with emerald green checkmark
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import sharp from 'sharp';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Pre-generated base64 icon (16x16 green square)
-const icon16Base64 = 'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAKklEQVR42mNgGFTg/4cP/6kCAQZqvkDtF9D0BepfQNMX0PQFw8kLDFQCAChfKp8NKcO3AAAAAElFTkSuQmCC';
+// QAerx logo SVG - Navy blue circle with emerald green checkmark
+const createLogoSvg = (size) => `
+<svg width="${size}" height="${size}" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+  <!-- Navy blue background circle -->
+  <circle cx="50" cy="50" r="45" fill="#2d3a6d"/>
+
+  <!-- Emerald green checkmark -->
+  <path d="M30 50 L45 65 L70 35"
+        stroke="#10b981"
+        stroke-width="${size > 32 ? 8 : 6}"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        fill="none"/>
+</svg>
+`;
 
 // Create directories
 const distIconsDir = path.join(__dirname, '..', 'dist', 'icons');
@@ -17,16 +31,33 @@ const publicIconsDir = path.join(__dirname, '..', 'public', 'icons');
   fs.mkdirSync(dir, { recursive: true });
 });
 
-// Create icons (all same for now - placeholder)
-const iconData = Buffer.from(icon16Base64, 'base64');
+// Icon sizes to generate
 const sizes = [16, 32, 48, 128];
 
-sizes.forEach(size => {
-  const distPath = path.join(distIconsDir, 'icon-' + size + '.png');
-  const publicPath = path.join(publicIconsDir, 'icon-' + size + '.png');
-  fs.writeFileSync(distPath, iconData);
-  fs.writeFileSync(publicPath, iconData);
-  console.log('Created icon-' + size + '.png');
-});
+async function createIcons() {
+  for (const size of sizes) {
+    const svgBuffer = Buffer.from(createLogoSvg(size));
 
-console.log('Done!');
+    // Generate PNG from SVG
+    const pngBuffer = await sharp(svgBuffer)
+      .resize(size, size)
+      .png()
+      .toBuffer();
+
+    // Write to both directories
+    const distPath = path.join(distIconsDir, `icon-${size}.png`);
+    const publicPath = path.join(publicIconsDir, `icon-${size}.png`);
+
+    fs.writeFileSync(distPath, pngBuffer);
+    fs.writeFileSync(publicPath, pngBuffer);
+
+    console.log(`Created icon-${size}.png`);
+  }
+
+  console.log('QAerx icons created successfully!');
+}
+
+createIcons().catch(err => {
+  console.error('Error creating icons:', err);
+  process.exit(1);
+});

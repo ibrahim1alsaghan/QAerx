@@ -7,6 +7,7 @@ interface RecordingState {
   isPaused: boolean;
   steps: UIStep[];
   sessionId: string | null;
+  startUrl: string | null; // URL when recording started
 }
 
 export function useRecording() {
@@ -15,6 +16,7 @@ export function useRecording() {
     isPaused: false,
     steps: [],
     sessionId: null,
+    startUrl: null,
   });
 
   useEffect(() => {
@@ -29,6 +31,16 @@ export function useRecording() {
             setState((prev) => ({
               ...prev,
               steps: [...prev.steps, message.step!],
+            }));
+          }
+          break;
+        case 'recording:step-updated':
+          if (message.step) {
+            setState((prev) => ({
+              ...prev,
+              steps: prev.steps.map((s) =>
+                s.id === message.step!.id ? message.step! : s
+              ),
             }));
           }
           break;
@@ -54,6 +66,10 @@ export function useRecording() {
 
   const startRecording = useCallback(async () => {
     try {
+      // Capture the starting URL before recording begins
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      const startUrl = tab?.url || null;
+
       const response = await chrome.runtime.sendMessage({
         type: 'command:start-recording',
       });
@@ -64,6 +80,7 @@ export function useRecording() {
           isPaused: false,
           steps: [],
           sessionId: crypto.randomUUID(),
+          startUrl,
         });
         toast.success('Recording started');
       } else {

@@ -12,7 +12,7 @@ interface FloatingRecordButtonProps {
 }
 
 export function FloatingRecordButton({ onTestCreated, onStepsAdded }: FloatingRecordButtonProps) {
-  const { isRecording, steps, startRecording, stopRecording } = useRecording();
+  const { isRecording, steps, startRecording, stopRecording, startUrl } = useRecording();
   const [showSaveModal, setShowSaveModal] = useState(false);
   const [recordedSteps, setRecordedSteps] = useState<any[]>([]);
   const [suites, setSuites] = useState<Suite[]>([]);
@@ -72,15 +72,14 @@ export function FloatingRecordButton({ onTestCreated, onStepsAdded }: FloatingRe
 
     setIsCreating(true);
     try {
-      // Get current URL
-      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-      const currentUrl = tabs[0]?.url || 'https://';
+      // Use the URL from when recording started (not current URL)
+      const testUrl = startUrl || 'https://';
 
       // Create new test with recorded steps
       const newTest = await TestRepository.createNew(
         selectedSuiteId,
         newTestName.trim(),
-        currentUrl
+        testUrl
       );
 
       // Update with recorded steps

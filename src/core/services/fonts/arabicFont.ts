@@ -13,24 +13,26 @@ let amiriBoldFontData: string | null = null;
 let fontLoadPromise: Promise<boolean> | null = null;
 
 // Multiple CDN sources for reliability - try each in order
-// Using jsDelivr (npm-based CDN) and unpkg as they have stable URLs
+// jsPDF works best with TTF fonts
 
-// Amiri font - excellent for Arabic text
+// Amiri font - excellent for Arabic text (TTF format required for jsPDF)
 const AMIRI_CDN_SOURCES = [
-  // jsDelivr - stable npm-based CDN
-  'https://cdn.jsdelivr.net/npm/@fontsource/amiri@5.0.19/files/amiri-arabic-400-normal.woff',
-  // Alternative: raw GitHub from a font repository
-  'https://raw.githubusercontent.com/AbiSourceCode/AbiSourceData/main/fonts/amiri/Amiri-Regular.ttf',
+  // jsDelivr - mirrors Google Fonts
+  'https://cdn.jsdelivr.net/fontsource/fonts/amiri@latest/latin-400-normal.ttf',
+  // Google Fonts static CDN - direct TTF
+  'https://fonts.gstatic.com/s/amiri/v27/J7aRnpd8CGxBHpUrtLMA7w.ttf',
+  // Alternative Google Fonts URL format
+  'https://fonts.gstatic.com/s/amiri/v24/J7aRnpd8CGxBHpUrtLMA7w.ttf',
 ];
 
 const AMIRI_BOLD_CDN_SOURCES = [
-  'https://cdn.jsdelivr.net/npm/@fontsource/amiri@5.0.19/files/amiri-arabic-700-normal.woff',
-  'https://raw.githubusercontent.com/AbiSourceCode/AbiSourceData/main/fonts/amiri/Amiri-Bold.ttf',
+  'https://cdn.jsdelivr.net/fontsource/fonts/amiri@latest/latin-700-normal.ttf',
+  'https://fonts.gstatic.com/s/amiri/v27/J7acnpd8CGxBHp2VkaY6zp5yGw.ttf',
 ];
 
 // Noto Sans Arabic as fallback (broader Unicode support)
 const NOTO_ARABIC_CDN_SOURCES = [
-  'https://cdn.jsdelivr.net/npm/@fontsource/noto-sans-arabic@5.0.19/files/noto-sans-arabic-arabic-400-normal.woff',
+  'https://fonts.gstatic.com/s/notosansarabic/v18/nwpxtLGrOAZMl5nJ_wfgRg3DrWFZWsnVBJ_sS6tlqHHFlhQ5l3sQWIHPqzCfyGyvu3CBFQLaig.ttf',
 ];
 
 /**
@@ -51,25 +53,63 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
  */
 async function fetchFontAsBase64(url: string): Promise<string | null> {
   try {
+    console.log(`[ArabicFont] Fetching: ${url}`);
+
+    // Create an AbortController for timeout
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout
+
+    // Note: Chrome extensions with host_permissions don't need CORS mode
     const response = await fetch(url, {
-      // Add timeout and headers for better compatibility
+      signal: controller.signal,
       headers: {
-        'Accept': 'font/woff, font/woff2, font/ttf, application/font-woff, application/font-woff2, */*',
+        'Accept': '*/*',
       },
     });
+
+    clearTimeout(timeoutId);
+
     if (!response.ok) {
-      console.warn(`[ArabicFont] Failed to fetch font from ${url}: ${response.status}`);
+      console.warn(`[ArabicFont] HTTP ${response.status} from ${url}`);
       return null;
     }
+
     const buffer = await response.arrayBuffer();
+    console.log(`[ArabicFont] Downloaded ${buffer.byteLength} bytes from ${url}`);
+
+    // Lower threshold - some fonts might be smaller when served compressed
     if (buffer.byteLength < 1000) {
-      // Font file too small, likely an error page
-      console.warn(`[ArabicFont] Font file suspiciously small from ${url}: ${buffer.byteLength} bytes`);
+      console.warn(`[ArabicFont] Font file too small from ${url}: ${buffer.byteLength} bytes`);
       return null;
     }
-    return arrayBufferToBase64(buffer);
+
+    // Verify it's a valid TTF/OTF file (jsPDF only supports these, not WOFF)
+    const bytes = new Uint8Array(buffer);
+    const isTTF = bytes[0] === 0x00 && bytes[1] === 0x01 && bytes[2] === 0x00 && bytes[3] === 0x00;
+    const isOTF = bytes[0] === 0x4F && bytes[1] === 0x54 && bytes[2] === 0x54 && bytes[3] === 0x4F;
+    const isWOFF = bytes[0] === 0x77 && bytes[1] === 0x4F && bytes[2] === 0x46 && bytes[3] === 0x46;
+
+    if (isWOFF) {
+      console.warn(`[ArabicFont] WOFF format not supported by jsPDF, skipping: ${url}`);
+      return null;
+    }
+
+    if (!isTTF && !isOTF) {
+      console.warn(`[ArabicFont] Invalid font format from ${url}, magic bytes: ${bytes[0]?.toString(16)} ${bytes[1]?.toString(16)} ${bytes[2]?.toString(16)} ${bytes[3]?.toString(16)}`);
+      return null;
+    }
+
+    console.log(`[ArabicFont] Valid ${isTTF ? 'TTF' : 'OTF'} font file detected`);
+
+    const base64 = arrayBufferToBase64(buffer);
+    console.log(`[ArabicFont] Successfully converted to base64, length: ${base64.length}`);
+    return base64;
   } catch (error) {
-    console.error('[ArabicFont] Error fetching font:', error);
+    if (error instanceof Error && error.name === 'AbortError') {
+      console.warn(`[ArabicFont] Timeout fetching font from ${url}`);
+    } else {
+      console.error('[ArabicFont] Error fetching font:', error);
+    }
     return null;
   }
 }

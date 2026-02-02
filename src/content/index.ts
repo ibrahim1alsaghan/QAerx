@@ -8,10 +8,11 @@ import { getSimplifiedPageContext, analyzeCurrentPage } from './helpers/PageAnal
 console.log('[QAerx] Content script starting...');
 
 // Initialize engines with error handling
-let recorder: ReturnType<typeof getRecorder>;
-let playback: ReturnType<typeof getPlayback>;
-let elementPicker: ReturnType<typeof getElementPicker>;
-let highlighter: ReturnType<typeof getElementHighlighter>;
+let recorder: ReturnType<typeof getRecorder> | null = null;
+let playback: ReturnType<typeof getPlayback> | null = null;
+let elementPicker: ReturnType<typeof getElementPicker> | null = null;
+let highlighter: ReturnType<typeof getElementHighlighter> | null = null;
+let initError: string | null = null;
 
 try {
   recorder = getRecorder();
@@ -20,6 +21,7 @@ try {
   highlighter = getElementHighlighter();
   console.log('[QAerx] Engines initialized successfully');
 } catch (error) {
+  initError = String(error);
   console.error('[QAerx] Failed to initialize engines:', error);
 }
 
@@ -35,34 +37,83 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
     // Recording commands
     case 'recording:start':
-      recorder.start(message.sessionId);
-      sendResponse({ success: true });
+      try {
+        if (!recorder) {
+          throw new Error('Recorder not initialized: ' + (initError || 'unknown error'));
+        }
+        console.log('[QAerx] Starting recorder with sessionId:', message.sessionId);
+        recorder.start(message.sessionId);
+        console.log('[QAerx] Recorder started successfully');
+        sendResponse({ success: true });
+      } catch (error) {
+        console.error('[QAerx] Failed to start recording:', error);
+        sendResponse({ success: false, error: String(error) });
+      }
       return false;
 
     case 'recording:stop':
-      const steps = recorder.stop();
-      sendResponse({ success: true, steps });
+      try {
+        if (!recorder) {
+          throw new Error('Recorder not initialized: ' + (initError || 'unknown error'));
+        }
+        console.log('[QAerx] Stopping recorder...');
+        const steps = recorder.stop();
+        console.log('[QAerx] Recorder stopped, steps:', steps.length);
+        sendResponse({ success: true, steps });
+      } catch (error) {
+        console.error('[QAerx] Failed to stop recording:', error);
+        sendResponse({ success: false, steps: [], error: String(error) });
+      }
       return false;
 
     case 'recording:pause':
-      recorder.pause();
-      sendResponse({ success: true });
+      try {
+        if (!recorder) {
+          throw new Error('Recorder not initialized: ' + (initError || 'unknown error'));
+        }
+        recorder.pause();
+        sendResponse({ success: true });
+      } catch (error) {
+        console.error('[QAerx] Failed to pause recording:', error);
+        sendResponse({ success: false, error: String(error) });
+      }
       return false;
 
     case 'recording:resume':
-      recorder.resume();
-      sendResponse({ success: true });
+      try {
+        if (!recorder) {
+          throw new Error('Recorder not initialized: ' + (initError || 'unknown error'));
+        }
+        recorder.resume();
+        sendResponse({ success: true });
+      } catch (error) {
+        console.error('[QAerx] Failed to resume recording:', error);
+        sendResponse({ success: false, error: String(error) });
+      }
       return false;
 
     case 'recording:status':
-      sendResponse({
-        isRecording: recorder.isRecording(),
-        steps: recorder.getSteps(),
-      });
+      try {
+        if (!recorder) {
+          sendResponse({ isRecording: false, steps: [], error: initError || 'Recorder not initialized' });
+          return false;
+        }
+        sendResponse({
+          isRecording: recorder.isRecording(),
+          steps: recorder.getSteps(),
+        });
+      } catch (error) {
+        console.error('[QAerx] Failed to get recording status:', error);
+        sendResponse({ isRecording: false, steps: [], error: String(error) });
+      }
       return false;
 
     // Playback commands
     case 'playback:execute':
+      if (!playback) {
+        sendResponse({ success: false, error: 'Playback not initialized: ' + (initError || 'unknown error') });
+        return false;
+      }
       playback
         .execute(message.steps, {
           timeout: message.timeout || 30000,
@@ -91,12 +142,20 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       return true; // Keep channel open for async
 
     case 'playback:stop':
+      if (!playback) {
+        sendResponse({ success: false, error: 'Playback not initialized' });
+        return false;
+      }
       playback.stop();
       sendResponse({ success: true });
       return false;
 
     // Element picker commands
     case 'picker:start':
+      if (!elementPicker) {
+        sendResponse({ success: false, error: 'Element picker not initialized' });
+        return false;
+      }
       elementPicker.start((selectors) => {
         chrome.runtime.sendMessage({
           type: 'picker:element-selected',
@@ -107,6 +166,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       return false;
 
     case 'picker:stop':
+      if (!elementPicker) {
+        sendResponse({ success: false, error: 'Element picker not initialized' });
+        return false;
+      }
       elementPicker.stop();
       sendResponse({ success: true });
       return false;
@@ -131,11 +194,19 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
     // Element highlighting
     case 'element:highlight':
+      if (!highlighter) {
+        sendResponse({ success: false, error: 'Highlighter not initialized' });
+        return false;
+      }
       highlighter.highlight(message.selector);
       sendResponse({ success: true });
       return false;
 
     case 'element:clear-highlight':
+      if (!highlighter) {
+        sendResponse({ success: false, error: 'Highlighter not initialized' });
+        return false;
+      }
       highlighter.clear();
       sendResponse({ success: true });
       return false;

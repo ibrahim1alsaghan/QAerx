@@ -27,6 +27,7 @@ export function MainContent({
         <TestDetail
           testId={selectedTestId}
           onBack={() => onSelectTest(null)}
+          onDelete={() => onSelectTest(null)}
         />
       </main>
     );

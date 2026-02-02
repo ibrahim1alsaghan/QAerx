@@ -19,6 +19,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   switch (message.type) {
     case 'content-script:ready':
       console.log('[QAerx] Content script ready in tab:', sender.tab?.id);
+
+      // If recording is active for this tab, resume recording on the new content script
+      // This handles page reloads during recording
+      if (recordingState.isRecording && recordingState.tabId === sender.tab?.id && recordingState.sessionId) {
+        console.log('[QAerx] Page reloaded during recording, resuming recording session...');
+
+        // Send recording:start to the new content script
+        chrome.tabs.sendMessage(sender.tab.id, {
+          type: 'recording:start',
+          sessionId: recordingState.sessionId,
+        }).then((response) => {
+          console.log('[QAerx] Recording resumed after page reload, response:', response);
+        }).catch((error) => {
+          console.error('[QAerx] Failed to resume recording after page reload:', error);
+        });
+      }
+
       sendResponse({ success: true });
       break;
 
@@ -43,8 +60,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       break;
 
     case 'recording:step-added':
+      console.log('[QAerx Background] Step added:', message.step?.name, 'Total:', recordingState.steps.length + 1);
       recordingState.steps.push(message.step);
       notifyUI({ type: 'recording:step-added', step: message.step });
+      sendResponse({ success: true });
+      break;
+
+    case 'recording:step-updated':
+      console.log('[QAerx Background] Step updated:', message.step?.name);
+      // Find and update the step in our state
+      const stepIndex = recordingState.steps.findIndex(s => s.id === message.step?.id);
+      if (stepIndex >= 0) {
+        recordingState.steps[stepIndex] = message.step;
+      }
+      notifyUI({ type: 'recording:step-updated', step: message.step });
       sendResponse({ success: true });
       break;
 
@@ -138,40 +167,55 @@ async function ensureContentScriptInjected(tabId: number): Promise<{ success: bo
 
 async function startRecording(tabId?: number): Promise<{ success: boolean; error?: string }> {
   try {
+    console.log('[QAerx Background] startRecording called, tabId:', tabId);
+
     const targetTabId = tabId || (await getActiveTabId());
     if (!targetTabId) {
+      console.log('[QAerx Background] No active tab found');
       return { success: false, error: 'No active tab found' };
     }
+
+    console.log('[QAerx Background] Target tab ID:', targetTabId);
 
     // Ensure content script is loaded
     const injectionResult = await ensureContentScriptInjected(targetTabId);
     if (!injectionResult.success) {
+      console.log('[QAerx Background] Content script injection failed:', injectionResult.error);
       return { success: false, error: injectionResult.error };
     }
+
+    console.log('[QAerx Background] Content script ready');
 
     const sessionId = crypto.randomUUID();
 
     // Send message to content script to start recording
-    await chrome.tabs.sendMessage(targetTabId, {
+    console.log('[QAerx Background] Sending recording:start to tab:', targetTabId);
+    const response = await chrome.tabs.sendMessage(targetTabId, {
       type: 'recording:start',
       sessionId,
     });
+    console.log('[QAerx Background] recording:start response:', response);
 
     recordingState.tabId = targetTabId;
     recordingState.isRecording = true;
     recordingState.sessionId = sessionId;
     recordingState.steps = [];
 
+    console.log('[QAerx Background] Recording started successfully');
     return { success: true };
   } catch (error) {
-    console.error('[QAerx] Failed to start recording:', error);
+    console.error('[QAerx Background] Failed to start recording:', error);
     return { success: false, error: 'Failed to start recording. Try refreshing the page.' };
   }
 }
 
 async function stopRecording(): Promise<{ success: boolean; steps?: UIStep[]; error?: string }> {
   try {
+    console.log('[QAerx Background] stopRecording called, tabId:', recordingState.tabId);
+    console.log('[QAerx Background] Current state steps:', recordingState.steps.length);
+
     if (!recordingState.tabId) {
+      console.log('[QAerx Background] No recording in progress');
       return { success: false, error: 'No recording in progress' };
     }
 
@@ -180,18 +224,23 @@ async function stopRecording(): Promise<{ success: boolean; steps?: UIStep[]; er
     if (!injectionResult.success) {
       // Return whatever steps we have
       const steps = recordingState.steps;
+      console.log('[QAerx Background] Content script unavailable, returning state steps:', steps.length);
       recordingState.isRecording = false;
       return { success: true, steps, error: 'Recording stopped but page was reloaded. Some steps may be missing.' };
     }
 
+    console.log('[QAerx Background] Sending recording:stop to tab');
     const response = await chrome.tabs.sendMessage(recordingState.tabId, {
       type: 'recording:stop',
     });
+    console.log('[QAerx Background] recording:stop response:', response);
+    console.log('[QAerx Background] Steps from content script:', response?.steps?.length || 0);
 
     recordingState.isRecording = false;
     return { success: true, steps: response.steps };
   } catch (error) {
-    console.error('[QAerx] Failed to stop recording:', error);
+    console.error('[QAerx Background] Failed to stop recording:', error);
+    console.log('[QAerx Background] Returning fallback steps:', recordingState.steps.length);
     recordingState.isRecording = false;
     return { success: true, steps: recordingState.steps, error: 'Recording stopped with errors.' };
   }

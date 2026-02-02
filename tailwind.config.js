@@ -17,13 +17,19 @@ export default {
           600: '#565869',
           700: '#40414f',
           800: '#343541',
+          850: '#2a2b32',  // Added for modern minimal design
           900: '#202123',
           950: '#0d0d0f',
         },
         accent: {
-          DEFAULT: '#10a37f',
-          hover: '#0d8a6a',
-          light: '#1a7f64',
+          DEFAULT: '#10b981',  // Emerald green from logo
+          hover: '#059669',
+          light: '#34d399',
+        },
+        primary: {
+          DEFAULT: '#2d3a6d',  // Navy blue from logo
+          light: '#3d4a7d',
+          dark: '#1e2a5e',
         },
         status: {
           pass: '#22c55e',

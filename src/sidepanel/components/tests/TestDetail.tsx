@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { ArrowLeft, Play, Save, Loader2, CheckCircle, XCircle, Database, ListChecks, Sparkles, FileDown, Code, History } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { Play, Save, Loader2, CheckCircle, XCircle, Database, ListChecks, Sparkles, FileDown, Code, History, MoreVertical, Trash2, Pencil, Check, X, Link } from 'lucide-react';
 import { TestRepository, ResultRepository } from '@/core/storage/repositories';
 import type { TestRun } from '@/types/result';
 import { StepEditor } from '../steps/StepEditor';
@@ -17,11 +17,12 @@ import { logger, sendToContent } from '@/shared/utils';
 interface TestDetailProps {
   testId: string;
   onBack: () => void;
+  onDelete?: () => void;
 }
 
 type TabType = 'steps' | 'data';
 
-export function TestDetail({ testId, onBack }: TestDetailProps) {
+export function TestDetail({ testId, onBack, onDelete }: TestDetailProps) {
   const [test, setTest] = useState<Test | null>(null);
   const [steps, setSteps] = useState<UIStep[]>([]);
   const [dataSets, setDataSets] = useState<Record<string, string>[]>([{}]);
@@ -29,6 +30,8 @@ export function TestDetail({ testId, onBack }: TestDetailProps) {
   const [isAIGenerated, setIsAIGenerated] = useState(false);
   const [activeTab, setActiveTab] = useState<TabType>('steps');
   const [isRunning, setIsRunning] = useState(false);
+  const [showMoreMenu, setShowMoreMenu] = useState(false);
+  const moreMenuRef = useRef<HTMLDivElement>(null);
   const [runProgress, setRunProgress] = useState<{
     currentStep: number;
     total: number;
@@ -48,6 +51,11 @@ export function TestDetail({ testId, onBack }: TestDetailProps) {
   const [hasChanges, setHasChanges] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  // Edit mode state
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [isEditingUrl, setIsEditingUrl] = useState(false);
+  const [editedName, setEditedName] = useState('');
+  const [editedUrl, setEditedUrl] = useState('');
   // Page direction for localized test data generation
   const [pageDirection, setPageDirection] = useState<{ direction: 'rtl' | 'ltr'; language?: string }>({ direction: 'ltr' });
   // Test run history (last 10 runs)
@@ -456,6 +464,70 @@ export function TestDetail({ testId, onBack }: TestDetailProps) {
     }
   };
 
+  const handleSaveName = async () => {
+    if (!test || !editedName.trim()) return;
+
+    try {
+      await TestRepository.update(testId, { name: editedName.trim() });
+      setTest({ ...test, name: editedName.trim() });
+      setIsEditingName(false);
+      toast.success('Test name updated');
+    } catch (error) {
+      toast.error('Failed to update test name');
+    }
+  };
+
+  const handleSaveUrl = async () => {
+    if (!test) return;
+
+    try {
+      await TestRepository.update(testId, { url: editedUrl.trim() || 'https://' });
+      setTest({ ...test, url: editedUrl.trim() || 'https://' });
+      setIsEditingUrl(false);
+      toast.success('Test URL updated');
+    } catch (error) {
+      toast.error('Failed to update test URL');
+    }
+  };
+
+  const startEditingName = () => {
+    setEditedName(test?.name || '');
+    setIsEditingName(true);
+  };
+
+  const startEditingUrl = () => {
+    setEditedUrl(test?.url || '');
+    setIsEditingUrl(true);
+  };
+
+  const cancelEditingName = () => {
+    setIsEditingName(false);
+    setEditedName('');
+  };
+
+  const cancelEditingUrl = () => {
+    setIsEditingUrl(false);
+    setEditedUrl('');
+  };
+
+  const handleDeleteTest = async () => {
+    if (!test) return;
+
+    // Confirm deletion
+    const confirmed = window.confirm(`Are you sure you want to delete "${test.name}"? This action cannot be undone.`);
+    if (!confirmed) return;
+
+    try {
+      await TestRepository.delete(testId);
+      toast.success('Test deleted');
+      onDelete?.();
+      onBack();
+    } catch (error) {
+      logger.error('Failed to delete test:', error);
+      toast.error('Failed to delete test');
+    }
+  };
+
   const handleRun = async () => {
     if (steps.length === 0) {
       toast.error('Add at least one step before running');
@@ -839,6 +911,17 @@ export function TestDetail({ testId, onBack }: TestDetailProps) {
     }
   };
 
+  // Close dropdown when clicking outside (must be before conditional returns)
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (moreMenuRef.current && !moreMenuRef.current.contains(event.target as Node)) {
+        setShowMoreMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
   if (!test) {
     return (
       <div className="flex items-center justify-center h-full text-dark-500">
@@ -852,70 +935,172 @@ export function TestDetail({ testId, onBack }: TestDetailProps) {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Header */}
-      <div className="flex items-center gap-3 px-4 py-3 border-b border-dark-800">
-        <button onClick={onBack} className="btn btn-icon btn-sm btn-ghost">
-          <ArrowLeft className="w-4 h-4" />
-        </button>
-        <div className="flex-1 min-w-0">
-          <h2 className="text-lg font-medium text-dark-100 truncate">{test.name}</h2>
-          <div className="flex items-center gap-2">
-            <p className="text-xs text-dark-500 truncate">{test.url}</p>
-            {testHistory.length > 0 && (
-              <div className="flex items-center gap-1.5 text-xs" title={`Last ${testHistory.length} runs`}>
-                <History className="w-3 h-3 text-dark-500" />
-                <span className="text-emerald-400">
-                  {testHistory.filter(r => r.status === 'passed').length}
-                </span>
-                <span className="text-dark-600">/</span>
-                <span className="text-red-400">
-                  {testHistory.filter(r => r.status === 'failed').length}
-                </span>
-                <span className="text-dark-500 ml-1">
-                  ({Math.round((testHistory.filter(r => r.status === 'passed').length / testHistory.length) * 100)}%)
-                </span>
-              </div>
-            )}
+      {/* Clean Toolbar */}
+      <div className="toolbar">
+        <div className="toolbar-group flex-1 min-w-0">
+          {/* Test info */}
+          <div className="min-w-0 flex-1">
+            {/* Test Name */}
+            <div className="flex items-center gap-2">
+              {isEditingName ? (
+                <div className="flex items-center gap-1 flex-1">
+                  <input
+                    type="text"
+                    value={editedName}
+                    onChange={(e) => setEditedName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleSaveName();
+                      if (e.key === 'Escape') cancelEditingName();
+                    }}
+                    className="input text-sm py-0.5 px-2 flex-1 min-w-0"
+                    autoFocus
+                  />
+                  <button onClick={handleSaveName} className="p-1 hover:bg-dark-700 rounded text-green-400">
+                    <Check className="w-4 h-4" />
+                  </button>
+                  <button onClick={cancelEditingName} className="p-1 hover:bg-dark-700 rounded text-dark-400">
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <span className="text-sm font-medium text-dark-100 truncate">{test.name}</span>
+                  <button
+                    onClick={startEditingName}
+                    className="p-1 hover:bg-dark-700 rounded text-dark-500 hover:text-dark-300"
+                    title="Edit test name"
+                  >
+                    <Pencil className="w-3 h-3" />
+                  </button>
+                  {testHistory.length > 0 && (
+                    <div className="flex items-center gap-1.5 text-xs" title={`Last ${testHistory.length} runs`}>
+                      <History className="w-3 h-3 text-dark-500" />
+                      <span className="text-green-400">{testHistory.filter(r => r.status === 'passed').length}</span>
+                      <span className="text-dark-600">/</span>
+                      <span className="text-red-400">{testHistory.filter(r => r.status === 'failed').length}</span>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+            {/* Test URL */}
+            <div className="flex items-center gap-1 mt-0.5">
+              {isEditingUrl ? (
+                <div className="flex items-center gap-1 flex-1">
+                  <input
+                    type="text"
+                    value={editedUrl}
+                    onChange={(e) => setEditedUrl(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleSaveUrl();
+                      if (e.key === 'Escape') cancelEditingUrl();
+                    }}
+                    placeholder="https://example.com"
+                    className="input text-xs py-0.5 px-2 flex-1 min-w-0"
+                    autoFocus
+                  />
+                  <button onClick={handleSaveUrl} className="p-1 hover:bg-dark-700 rounded text-green-400">
+                    <Check className="w-3 h-3" />
+                  </button>
+                  <button onClick={cancelEditingUrl} className="p-1 hover:bg-dark-700 rounded text-dark-400">
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <Link className="w-3 h-3 text-dark-500 flex-shrink-0" />
+                  <span className="text-xs text-dark-500 truncate max-w-[200px]" title={test.url}>
+                    {test.url || 'No URL set'}
+                  </span>
+                  <button
+                    onClick={startEditingUrl}
+                    className="p-0.5 hover:bg-dark-700 rounded text-dark-500 hover:text-dark-300"
+                    title="Edit test URL"
+                  >
+                    <Pencil className="w-2.5 h-2.5" />
+                  </button>
+                </>
+              )}
+            </div>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          {activeTab === 'steps' && !isRunning && (
-            <button
-              onClick={handleSmartCollect}
-              disabled={isAnalyzing}
-              className="btn btn-sm btn-ghost text-cyan-400 hover:bg-cyan-400/10"
-              title="Scan page fields and enhance with AI"
-            >
-              {isAnalyzing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-              Smart Collect
-            </button>
+
+        <div className="toolbar-group">
+          {/* More menu (secondary actions) */}
+          {!isRunning && (
+            <div className="relative" ref={moreMenuRef}>
+              <button
+                onClick={() => setShowMoreMenu(!showMoreMenu)}
+                className="btn btn-sm btn-ghost"
+                title="More actions"
+              >
+                <MoreVertical className="w-4 h-4" />
+              </button>
+
+              {showMoreMenu && (
+                <div className="dropdown-menu right-0 top-full mt-1 animate-fade-in">
+                  {activeTab === 'steps' && (
+                    <button
+                      onClick={() => {
+                        setShowMoreMenu(false);
+                        handleSmartCollect();
+                      }}
+                      disabled={isAnalyzing}
+                      className="dropdown-item w-full text-left"
+                    >
+                      {isAnalyzing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4 text-cyan-400" />}
+                      Smart Collect
+                    </button>
+                  )}
+                  {steps.length > 0 && (
+                    <button
+                      onClick={() => {
+                        setShowMoreMenu(false);
+                        setShowExportModal(true);
+                      }}
+                      className="dropdown-item w-full text-left"
+                    >
+                      <Code className="w-4 h-4 text-orange-400" />
+                      Export to Code
+                    </button>
+                  )}
+                  {runProgress && (
+                    <button
+                      onClick={() => {
+                        setShowMoreMenu(false);
+                        handleDownloadReport();
+                      }}
+                      className="dropdown-item w-full text-left"
+                    >
+                      <FileDown className="w-4 h-4 text-blue-400" />
+                      Download Report
+                    </button>
+                  )}
+                  <div className="dropdown-divider" />
+                  <button
+                    onClick={() => {
+                      setShowMoreMenu(false);
+                      handleDeleteTest();
+                    }}
+                    className="dropdown-item-danger w-full text-left"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    Delete Test
+                  </button>
+                </div>
+              )}
+            </div>
           )}
-          {steps.length > 0 && !isRunning && (
-            <button
-              onClick={() => setShowExportModal(true)}
-              className="btn btn-sm btn-ghost text-orange-400 hover:bg-orange-400/10"
-              title="Export test to Playwright, Cypress, or Selenium"
-            >
-              <Code className="w-4 h-4" />
-              Export
-            </button>
-          )}
-          {runProgress && !isRunning && (
-            <button
-              onClick={handleDownloadReport}
-              className="btn btn-sm btn-ghost text-blue-400 hover:bg-blue-400/10"
-              title="Download PDF test report"
-            >
-              <FileDown className="w-4 h-4" />
-              Report
-            </button>
-          )}
+
+          {/* Save button (only when changes) */}
           {hasChanges && (
-            <button onClick={handleSave} className="btn btn-sm btn-ghost">
+            <button onClick={handleSave} className="btn btn-sm btn-secondary">
               <Save className="w-4 h-4" />
               Save
             </button>
           )}
+
+          {/* Primary action: Run Test */}
           <button
             onClick={handleRun}
             disabled={isRunning}
@@ -929,7 +1114,7 @@ export function TestDetail({ testId, onBack }: TestDetailProps) {
             ) : (
               <>
                 <Play className="w-4 h-4" />
-                Run Test
+                Run
               </>
             )}
           </button>

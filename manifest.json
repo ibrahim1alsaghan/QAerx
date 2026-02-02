@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "QAerx",
-  "description": "Automation testing with AI-powered test data generation",
+  "description": "AI Agent for Automated Web Testing - LLM-powered page analysis, semantic data generation, and intelligent test automation",
   "version": "0.1.0",
   "icons": {
     "16": "icons/icon-16.png",

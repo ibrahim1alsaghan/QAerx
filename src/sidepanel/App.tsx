@@ -29,19 +29,47 @@ function AppContent() {
     setSelectedTestId(testId);
   }, [refreshTests]);
 
+  // Navigation handlers for breadcrumbs
+  const handleNavigateToSettings = useCallback(() => {
+    setCurrentView('settings');
+    setSelectedTestId(null);
+  }, []);
+
+  const handleNavigateToSuites = useCallback(() => {
+    setCurrentView('suites');
+    setSelectedTestId(null);
+  }, []);
+
+  const handleNavigateToTests = useCallback(() => {
+    setSelectedTestId(null);
+  }, []);
+
   return (
     <>
       <div className="flex h-screen bg-dark-900">
+        {/* Sidebar with tree navigation */}
         <Sidebar
           currentView={currentView}
+          selectedSuiteId={selectedSuiteId}
+          selectedTestId={selectedTestId}
           onViewChange={setCurrentView}
+          onSelectSuite={setSelectedSuiteId}
+          onSelectTest={setSelectedTestId}
         />
+
+        {/* Main content area */}
         <div className="flex-1 flex flex-col overflow-hidden">
+          {/* Header with breadcrumbs */}
           <Header
             currentView={currentView}
             selectedSuiteId={selectedSuiteId}
             selectedTestId={selectedTestId}
+            onNavigateToSettings={handleNavigateToSettings}
+            onNavigateToSuites={handleNavigateToSuites}
+            onNavigateToTests={handleNavigateToTests}
           />
+
+          {/* Main content */}
           <MainContent
             currentView={currentView}
             selectedSuiteId={selectedSuiteId}
@@ -61,7 +89,7 @@ function AppContent() {
       <Toaster
         position="bottom-right"
         toastOptions={{
-          className: 'bg-dark-800 text-dark-100 border border-dark-600',
+          className: 'bg-dark-800 text-dark-100 border border-dark-700',
           duration: 3000,
         }}
       />

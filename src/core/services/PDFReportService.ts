@@ -6,7 +6,7 @@ import {
   loadArabicFonts,
   registerArabicFonts,
   containsArabic,
-  prepareArabicText,
+  reverseArabicText,
 } from './fonts/arabicFont';
 
 // Re-export for backwards compatibility
@@ -541,15 +541,25 @@ export class PDFReportService {
 
       yPosition += 25;
 
+      // Set Arabic font before table if available
+      if (this.hasArabicFont) {
+        doc.setFont('Amiri', 'normal');
+      }
+
       const failureData = failures.map((failure) => {
         const step = steps.find((s) => s.id === failure.stepId);
         const dataSetNum = failure.dataSetIndex + 1;
         const selector = step?.selectors[0]?.value || '-';
+
+        // Process text for Arabic - use reverseArabicText for proper RTL rendering in jsPDF
+        const stepName = this.processTextForPDF(step?.name || 'Unknown', 45);
+        const errorMsg = this.processTextForPDF(failure.error || 'Unknown error', 50);
+
         return [
-          step?.name || 'Unknown',
+          stepName,
           `Data Set ${dataSetNum}`,
           this.truncateString(selector, 30),
-          this.truncateString(failure.error || 'Unknown error', 50),
+          errorMsg,
         ];
       });
 
@@ -579,7 +589,7 @@ export class PDFReportService {
           3: { cellWidth: 65, fontSize: 7 },
         },
         didParseCell: (data) => {
-          // Handle Arabic text
+          // Handle Arabic text - set font and alignment
           if (data.section === 'body' && this.hasArabicFont) {
             const cellText = data.cell.text.join('');
             if (containsArabic(cellText)) {
@@ -764,15 +774,46 @@ export class PDFReportService {
   }
 
   /**
+   * Process text for PDF tables - handles Arabic text with proper RTL rendering
+   * Uses reverseArabicText because jsPDF autoTable doesn't handle RTL automatically
+   */
+  private static processTextForPDF(text: string, maxLength?: number): string {
+    if (!text) return '-';
+
+    let processed = text;
+
+    // If Arabic font is available and text contains Arabic, reverse for RTL rendering
+    if (this.hasArabicFont && containsArabic(text)) {
+      processed = reverseArabicText(text);
+    } else if (/[^\x00-\x7F]/.test(text) && !this.hasArabicFont) {
+      // Fallback for non-ASCII when font not available
+      processed = text
+        .replace(/[\u0600-\u06FF]+/g, '[Arabic]')
+        .replace(/[\u4E00-\u9FFF]+/g, '[Chinese]')
+        .replace(/[\u3040-\u309F\u30A0-\u30FF]+/g, '[Japanese]')
+        .replace(/[\uAC00-\uD7AF]+/g, '[Korean]')
+        .replace(/[^\x00-\x7F]+/g, '[...]');
+    }
+
+    // Truncate if maxLength specified
+    if (maxLength && processed.length > maxLength) {
+      return processed.substring(0, maxLength - 3) + '...';
+    }
+
+    return processed;
+  }
+
+  /**
    * Sanitize text for PDF - handle non-Latin characters
    * Uses Arabic font when available, otherwise falls back to placeholders
    */
   private static sanitizeForPDF(text: string): string {
     if (!text) return '';
 
-    // If Arabic font is available and text contains Arabic, prepare it for RTL rendering
+    // If Arabic font is available and text contains Arabic, reverse for proper RTL rendering
+    // Note: jsPDF doesn't handle RTL automatically, so we need to reverse Arabic text
     if (this.hasArabicFont && containsArabic(text)) {
-      return prepareArabicText(text);
+      return reverseArabicText(text);
     }
 
     // Check if text contains non-ASCII characters

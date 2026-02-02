@@ -27,6 +27,7 @@ export class EventCapture {
     if (this.isAttached) return;
 
     const events = ['click', 'dblclick', 'input', 'change', 'keydown', 'scroll'];
+    console.log('[QAerx EventCapture] Attaching event listeners for:', events);
 
     for (const eventType of events) {
       const boundHandler = this.createHandler(eventType);
@@ -35,6 +36,7 @@ export class EventCapture {
     }
 
     this.isAttached = true;
+    console.log('[QAerx EventCapture] Event listeners attached successfully');
   }
 
   detach(): void {
@@ -49,9 +51,13 @@ export class EventCapture {
 
   private createHandler(eventType: string): EventListener {
     return (e: Event) => {
+      console.log(`[QAerx EventCapture] Event detected: ${eventType}`, e.target);
       const captured = this.captureEvent(eventType, e);
       if (captured) {
+        console.log(`[QAerx EventCapture] Event captured:`, captured.type, captured.target);
         this.handler(captured);
+      } else {
+        console.log(`[QAerx EventCapture] Event filtered out: ${eventType}`);
       }
     };
   }
