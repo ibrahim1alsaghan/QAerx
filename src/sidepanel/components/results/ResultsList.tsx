@@ -77,7 +77,11 @@ export function ResultsList() {
                 </div>
                 <div className="text-right text-sm">
                   <div className="text-dark-300">
-                    {run.summary.passedSteps}/{run.summary.totalSteps} passed
+                    {run.summary.totalSteps === 0 ? (
+                      <span className="text-dark-500 italic">No steps</span>
+                    ) : (
+                      `${run.summary.passedSteps}/${run.summary.totalSteps} passed`
+                    )}
                   </div>
                   <div className="text-xs text-dark-500">
                     {(run.summary.duration / 1000).toFixed(1)}s

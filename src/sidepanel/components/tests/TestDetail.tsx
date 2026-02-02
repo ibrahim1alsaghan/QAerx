@@ -544,6 +544,17 @@ export function TestDetail({ testId, onBack, onDelete }: TestDetailProps) {
       results: [],
     });
 
+    // Track results in local variable to avoid stale closure issues with React state
+    const collectedResults: Array<{
+      dataSetIndex: number;
+      stepId: string;
+      status: 'passed' | 'failed';
+      error?: string;
+      duration: number;
+      pageResponse?: string;
+      aiValidation?: any;
+    }> = [];
+
     // Initialize AI validation service
     const validationService = new AIValidationService();
     try {
@@ -704,6 +715,7 @@ export function TestDetail({ testId, onBack, onDelete }: TestDetailProps) {
                           variables,
                           tab.url || ''
                         );
+                        collectedResults.push(validatedResult);
                         setRunProgress((prev) => {
                           if (!prev) return null;
                           return {
@@ -786,28 +798,32 @@ export function TestDetail({ testId, onBack, onDelete }: TestDetailProps) {
                 const duration = Date.now() - startTime;
 
                 // Mark step as passed
+                const passedResult = { dataSetIndex, stepId: step.id, status: 'passed' as const, duration };
+                collectedResults.push(passedResult);
                 setRunProgress((prev) => {
                   if (!prev) return null;
                   return {
                     ...prev,
                     currentStepId: null,
-                    results: [...prev.results, { dataSetIndex, stepId: step.id, status: 'passed' as const, duration }],
+                    results: [...prev.results, passedResult],
                   };
                 });
               } catch (error) {
                 // Mark step as failed
+                const failedResult = {
+                  dataSetIndex,
+                  stepId: step.id,
+                  status: 'failed' as const,
+                  error: `${step.action.type === 'navigate' ? 'Navigation' : 'Wait'} failed: ${error instanceof Error ? error.message : String(error)}`,
+                  duration: 0
+                };
+                collectedResults.push(failedResult);
                 setRunProgress((prev) => {
                   if (!prev) return null;
                   return {
                     ...prev,
                     currentStepId: null,
-                    results: [...prev.results, {
-                      dataSetIndex,
-                      stepId: step.id,
-                      status: 'failed' as const,
-                      error: `${step.action.type === 'navigate' ? 'Navigation' : 'Wait'} failed: ${error instanceof Error ? error.message : String(error)}`,
-                      duration: 0
-                    }],
+                    results: [...prev.results, failedResult],
                   };
                 });
                 throw error;
@@ -844,6 +860,7 @@ export function TestDetail({ testId, onBack, onDelete }: TestDetailProps) {
                       variables,
                       tab.url || ''
                     );
+                    collectedResults.push(validatedResult);
                     setRunProgress((prev) => {
                       if (!prev) return null;
                       return {
@@ -875,20 +892,20 @@ export function TestDetail({ testId, onBack, onDelete }: TestDetailProps) {
 
       toast.success('Test completed!');
 
-      // Save test run to history
+      // Save test run to history using collectedResults (not runProgress which has stale closure)
       if (test) {
         try {
-          const finalResults = runProgress?.results || [];
-          const passed = finalResults.filter(r => r.status === 'passed').length;
-          const failed = finalResults.filter(r => r.status === 'failed').length;
-          const status = failed > 0 ? 'failed' : 'passed';
+          const passed = collectedResults.filter(r => r.status === 'passed').length;
+          const failed = collectedResults.filter(r => r.status === 'failed').length;
+          // Mark as error if no steps were executed (empty test somehow got through)
+          const status = collectedResults.length === 0 ? 'error' : (failed > 0 ? 'failed' : 'passed');
 
           const testRun = await ResultRepository.create(test.id, test.suiteId);
           await ResultRepository.update(testRun.id, {
             completedAt: Date.now(),
             status,
             summary: {
-              totalSteps: finalResults.length,
+              totalSteps: collectedResults.length,
               passedSteps: passed,
               failedSteps: failed,
               skippedSteps: 0,
