@@ -13,6 +13,36 @@ QAerx is an intelligent Chrome extension that uses LLM-powered analysis to autom
 
 ---
 
+## What's New (v0.1.0)
+
+### One-Click Recording
+- **Floating Record Button** - Always-visible button to start recording instantly
+- No need to create a test first - record now, save later
+- Save to new test or append to existing test
+
+### Smart Selector Detection
+- **Dynamic ID Detection** - Automatically detects and avoids unstable selectors
+- Supports Frappe, React, Angular, Vue, MUI, and 20+ framework patterns
+- Visual stability indicators in element picker (✓ stable, ⚠️ unstable)
+- Falls back to stable attributes (name, aria-label, placeholder)
+
+### Arabic & RTL Support
+- **Full Arabic text support** in PDF reports
+- Amiri font loaded from CDN for proper Unicode rendering
+- RTL text alignment in tables and data
+
+### AI Status Indicator
+- Real-time AI availability status in header
+- Green (ready), Yellow (no API key), Red (offline)
+- Quick link to configure API key
+
+### Enhanced Error Handling
+- Centralized error management with error codes
+- User-friendly error messages
+- Graceful fallbacks for all features
+
+---
+
 ## AI-Powered Features
 
 | Feature | Description |
@@ -23,20 +53,53 @@ QAerx is an intelligent Chrome extension that uses LLM-powered analysis to autom
 | **NLP-Based Language Detection** | Automatically detects page language and RTL/LTR direction |
 | **Visual Debugging with AI Context** | Captures screenshots on failure with contextual analysis |
 | **Self-Healing Selectors** | AI suggests alternative selectors when elements change |
+| **Scenario-Based Testing** | Auto-generates best-case, worst-case, edge-case, and boundary test data |
 
 ## Core Features
 
 - **Record & Replay** - Record user actions and play them back automatically
+- **One-Click Recording** - Start recording instantly with floating button
 - **Data-Driven Testing** - Run same test with multiple data sets using `{{variables}}`
-- **Visual Element Picker** - Click to select elements, no manual selector writing
-- **Smart Selectors** - Automatically finds the best CSS selectors (ID, name, aria, etc.)
+- **Visual Element Picker** - Click to select elements with stability indicators
+- **Smart Selectors** - Automatically finds the best CSS selectors, avoids dynamic IDs
 - **Real-Time Validation** - See element count and status as you type selectors
 - **Wait Strategies** - Wait for time or wait until elements appear
 - **Multi-Page Support** - Navigate between pages seamlessly during tests
 - **Live Execution Tracking** - Watch tests run with color-coded status
 - **Test Suites** - Organize tests into folders
 - **CSV Import/Export** - Import test data from spreadsheets
+- **PDF Reports** - Generate comprehensive reports with Arabic/Unicode support
 - **Local Storage** - All data stored in browser IndexedDB, fully private
+
+---
+
+## Smart Selector Detection
+
+QAerx automatically detects and avoids unstable/dynamic selectors that change on page refresh:
+
+### Detected Dynamic Patterns
+
+| Framework | Pattern Examples |
+|-----------|-----------------|
+| **Frappe** | `frappe-ui-5`, `frappe_ui_8`, `control-1-2` |
+| **React** | `:r0:`, `react-select-1` |
+| **Angular** | `ng-5`, `ng_123` |
+| **MUI** | `mui-456` |
+| **HeadlessUI** | `headlessui-listbox-1` |
+| **Radix** | `radix-dropdown-5` |
+| **Select2** | `select2-email-container` |
+| **Generic** | UUIDs, hashes, pure numbers |
+
+### Selector Priority Order
+
+1. `data-testid` / `data-cy` (highest stability)
+2. `aria-label` attributes
+3. Stable IDs (non-dynamic)
+4. `name` attributes
+5. `placeholder` attributes
+6. Semantic CSS classes
+7. Text content
+8. Full CSS path (fallback)
 
 ---
 
@@ -85,45 +148,30 @@ Automatically detects:
 
 ## Technical Architecture
 
-### AI/ML Components
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                      QAerx AI Layer                          │
-├─────────────────────────────────────────────────────────────┤
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐       │
-│  │ LLM Service  │  │   Prompt     │  │  Response    │       │
-│  │ (OpenAI API) │  │  Templates   │  │   Parser     │       │
-│  └──────────────┘  └──────────────┘  └──────────────┘       │
-│         │                 │                 │               │
-│         ▼                 ▼                 ▼               │
-│  ┌─────────────────────────────────────────────────┐        │
-│  │              AI Service Orchestrator             │        │
-│  │  • Rate limiting  • Caching  • Error handling   │        │
-│  └─────────────────────────────────────────────────┘        │
-└─────────────────────────────────────────────────────────────┘
-```
-
-| Component | Description |
-|-----------|-------------|
-| **LLM Integration** | OpenAI GPT-4o-mini for intelligent analysis |
-| **Prompt Engineering** | Custom prompts for page analysis, data generation, selector healing |
-| **NLP Processing** | Language detection, RTL/LTR classification, semantic field naming |
-| **DOM Understanding** | AI interprets page structure without manual configuration |
-| **Graceful Degradation** | Fallback mechanisms when AI is unavailable |
-
 ### Extension Architecture
 
 ```
 src/
 ├── background/          # Service worker (Chrome MV3)
 ├── content/             # Page scripts (recorder, playback, picker)
+│   ├── recorder/        # Recording engine & selector generator
+│   ├── picker/          # Visual element picker
+│   └── helpers/         # Page analyzer with field detection
 ├── sidepanel/           # Main UI (React app)
+│   ├── components/      # UI components
+│   │   ├── ai/          # AI status indicator
+│   │   ├── recording/   # Floating record button
+│   │   ├── tests/       # Test editor & runner
+│   │   └── settings/    # Settings panel
+│   └── hooks/           # Custom React hooks
 ├── core/
-│   ├── services/ai/     # AI service layer & prompt templates
-│   ├── services/fonts/  # Font loading for PDF reports
-│   └── storage/         # IndexedDB layer (Dexie.js)
-├── shared/              # Shared utilities & messaging
+│   ├── services/        # Core services
+│   │   ├── ai/          # AI service layer & prompts
+│   │   ├── fonts/       # Arabic font loader for PDFs
+│   │   └── PDFReport... # PDF generation with Unicode
+│   ├── storage/         # IndexedDB layer (Dexie.js)
+│   └── utils/           # Error handling, utilities
+├── config/              # Environment & constants
 └── types/               # TypeScript types
 ```
 
@@ -134,6 +182,18 @@ src/
 - **Robust JSON Extraction** - Handles markdown-wrapped and raw JSON responses
 - **Error Handling** - Retry logic, graceful fallbacks, user-friendly messages
 - **Rate Limiting** - Prevents API abuse and manages costs
+
+### Configuration System
+
+```typescript
+// src/config/env.ts
+export const defaultConfig = {
+  ai: { provider: 'openai', model: 'gpt-4o-mini', maxTokens: 4096 },
+  execution: { defaultTimeout: 30000, maxParallelTests: 3 },
+  storage: { maxTestHistory: 100 },
+  features: { aiDataGeneration: true, selectorHealing: true }
+};
+```
 
 ---
 
@@ -147,7 +207,7 @@ src/
 | **Vite** | Build tool |
 | **Dexie.js** | IndexedDB wrapper |
 | **Tailwind CSS** | Styling |
-| **jsPDF** | PDF report generation |
+| **jsPDF** | PDF report generation with Arabic support |
 | **Chrome MV3** | Extension platform |
 
 ---
@@ -182,7 +242,14 @@ npm run build
 
 ## Quick Start
 
-### Create a Test
+### One-Click Recording (New!)
+1. Open any webpage
+2. Click the **floating Record button** (bottom-right)
+3. Perform your actions on the page
+4. Click **Stop** when done
+5. Save to a new test or add to existing test
+
+### Create a Test Manually
 1. Click QAerx icon in Chrome toolbar
 2. Click "+ New Test"
 3. Enter test name and starting URL
@@ -190,6 +257,7 @@ npm run build
 ### Add Steps
 - Click "Add Step" → choose type (Click, Type, Navigate, Wait)
 - Use "Pick" button to visually select elements
+- Or use **Collect Fields** to auto-detect form fields
 - Or use **AI Page Analyzer** to auto-generate steps
 
 ### AI-Powered Data Generation
@@ -202,8 +270,9 @@ npm run build
 
 **Steps (can be auto-generated by AI):**
 ```
-Type → #email → {{email}}
-Type → #password → {{password}}
+Navigate → https://example.com/login
+Type → [name="email"] → {{email}}
+Type → [name="password"] → {{password}}
 Click → button[type="submit"]
 Wait → 2000ms
 ```
@@ -218,6 +287,17 @@ Wait → 2000ms
 
 ---
 
+## PDF Reports
+
+QAerx generates comprehensive PDF reports with:
+- Test execution summary (pass/fail/skip rates)
+- Step-by-step execution log
+- Data set results with scenario badges
+- Failure analysis with error messages
+- **Full Arabic/Unicode support** via Amiri font
+
+---
+
 ## Development
 
 ```bash
@@ -228,6 +308,21 @@ npm run build:quick  # Skip TypeScript check
 ```
 
 After building, reload the extension in Chrome to see changes.
+
+---
+
+## Project Structure
+
+```
+qaerx/
+├── src/                 # Source code
+├── dist/                # Built extension (gitignored)
+├── scripts/             # Build scripts
+├── manifest.json        # Chrome extension manifest
+├── vite.config.ts       # Vite configuration
+├── tsconfig.json        # TypeScript configuration
+└── package.json         # Dependencies
+```
 
 ---
 

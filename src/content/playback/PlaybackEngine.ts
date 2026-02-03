@@ -37,6 +37,7 @@ const DEFAULT_TIMEOUT = 30000;
 
 export class PlaybackEngine {
   private shouldStop = false;
+  private currentHighlight: HTMLElement | null = null;
 
   async execute(steps: UIStep[], options: Partial<PlaybackOptions> = {}): Promise<PlaybackResult> {
     const { timeout = DEFAULT_TIMEOUT, variables = {}, onStepStart, onStepComplete } = options;
@@ -89,6 +90,7 @@ export class PlaybackEngine {
 
   stop(): void {
     this.shouldStop = true;
+    this.hideLiveHighlight(); // Clean up any active highlight
   }
 
   private async executeStep(
@@ -483,18 +485,25 @@ export class PlaybackEngine {
   private async click(selectors: SelectorStrategy[], timeout: number): Promise<void> {
     const element = await this.findElement(selectors, timeout);
     this.scrollIntoView(element);
+    this.showLiveHighlight(element);
     (element as HTMLElement).click();
+    await this.sleep(100);
+    this.hideLiveHighlight();
   }
 
   private async dblclick(selectors: SelectorStrategy[], timeout: number): Promise<void> {
     const element = await this.findElement(selectors, timeout);
     this.scrollIntoView(element);
+    this.showLiveHighlight(element);
     element.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+    await this.sleep(100);
+    this.hideLiveHighlight();
   }
 
   private async type(selectors: SelectorStrategy[], text: string, timeout: number): Promise<void> {
     const element = await this.findElement(selectors, timeout);
     this.scrollIntoView(element);
+    this.showLiveHighlight(element);
 
     if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
       element.focus();
@@ -508,30 +517,42 @@ export class PlaybackEngine {
       }
 
       element.dispatchEvent(new Event('change', { bubbles: true }));
+      this.hideLiveHighlight();
     } else {
+      this.hideLiveHighlight();
       throw new Error('Element is not an input or textarea');
     }
   }
 
   private async select(selectors: SelectorStrategy[], value: string, timeout: number): Promise<void> {
     const element = await this.findElement(selectors, timeout);
+    this.scrollIntoView(element);
+    this.showLiveHighlight(element);
 
     if (element instanceof HTMLSelectElement) {
       element.value = value;
       element.dispatchEvent(new Event('change', { bubbles: true }));
+      await this.sleep(100);
+      this.hideLiveHighlight();
     } else {
+      this.hideLiveHighlight();
       throw new Error('Element is not a select');
     }
   }
 
   private async check(selectors: SelectorStrategy[], checked: boolean, timeout: number): Promise<void> {
     const element = await this.findElement(selectors, timeout);
+    this.scrollIntoView(element);
+    this.showLiveHighlight(element);
 
     if (element instanceof HTMLInputElement && (element.type === 'checkbox' || element.type === 'radio')) {
       if (element.checked !== checked) {
         element.click();
       }
+      await this.sleep(100);
+      this.hideLiveHighlight();
     } else {
+      this.hideLiveHighlight();
       throw new Error('Element is not a checkbox or radio');
     }
   }
@@ -554,6 +575,42 @@ export class PlaybackEngine {
 
   private sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Show live highlight on the element being interacted with (blue/green glow)
+   */
+  private showLiveHighlight(element: Element): void {
+    this.hideLiveHighlight(); // Remove any existing highlight
+
+    const htmlEl = element as HTMLElement;
+    this.currentHighlight = htmlEl;
+
+    // Store original styles
+    htmlEl.dataset.liveOutline = htmlEl.style.outline;
+    htmlEl.dataset.liveBoxShadow = htmlEl.style.boxShadow;
+    htmlEl.dataset.liveTransition = htmlEl.style.transition;
+
+    // Apply live highlight (blue glow)
+    htmlEl.style.transition = 'outline 0.2s, box-shadow 0.2s';
+    htmlEl.style.outline = '2px solid #3b82f6';
+    htmlEl.style.boxShadow = '0 0 12px 4px rgba(59, 130, 246, 0.4)';
+  }
+
+  /**
+   * Remove the live highlight from the current element
+   */
+  private hideLiveHighlight(): void {
+    if (this.currentHighlight) {
+      const htmlEl = this.currentHighlight;
+      htmlEl.style.outline = htmlEl.dataset.liveOutline || '';
+      htmlEl.style.boxShadow = htmlEl.dataset.liveBoxShadow || '';
+      htmlEl.style.transition = htmlEl.dataset.liveTransition || '';
+      delete htmlEl.dataset.liveOutline;
+      delete htmlEl.dataset.liveBoxShadow;
+      delete htmlEl.dataset.liveTransition;
+      this.currentHighlight = null;
+    }
   }
 
   /**

@@ -727,12 +727,18 @@ export function TestDetail({ testId, onBack, onDelete }: TestDetailProps) {
                     }
                   }
                 } catch (error) {
-                  // Check if this is a navigation-related error
-                  const errorMsg = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
-                  if (errorMsg.includes('message channel closed') ||
-                      errorMsg.includes('receiving end does not exist') ||
-                      errorMsg.includes('context invalidated')) {
-                    logger.warn('Page navigation detected during step execution');
+                  // Check if this is a navigation-related error (bfcache, page navigation, etc.)
+                  const errorMsg = (error instanceof Error ? error.message : String(error)).toLowerCase();
+                  const isNavigationError =
+                    errorMsg.includes('message channel closed') ||
+                    errorMsg.includes('receiving end does not exist') ||
+                    errorMsg.includes('context invalidated') ||
+                    errorMsg.includes('back/forward cache') ||
+                    errorMsg.includes('bfcache') ||
+                    errorMsg.includes('extension port');
+
+                  if (isNavigationError) {
+                    logger.warn('Page navigation detected during step execution (bfcache or navigation)');
                     // Continue without throwing - this is expected when page navigates
                   } else {
                     logger.error('Error executing steps before navigation:', error);
@@ -872,12 +878,18 @@ export function TestDetail({ testId, onBack, onDelete }: TestDetailProps) {
                 }
               }
             } catch (error) {
-              // Check if this is a navigation-related error
-              const errorMsg = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
-              if (errorMsg.includes('message channel closed') ||
-                  errorMsg.includes('receiving end does not exist') ||
-                  errorMsg.includes('context invalidated')) {
-                logger.warn('Page navigation detected during remaining step execution');
+              // Check if this is a navigation-related error (bfcache, page navigation, etc.)
+              const errorMsg = (error instanceof Error ? error.message : String(error)).toLowerCase();
+              const isNavigationError =
+                errorMsg.includes('message channel closed') ||
+                errorMsg.includes('receiving end does not exist') ||
+                errorMsg.includes('context invalidated') ||
+                errorMsg.includes('back/forward cache') ||
+                errorMsg.includes('bfcache') ||
+                errorMsg.includes('extension port');
+
+              if (isNavigationError) {
+                logger.warn('Page navigation detected during remaining step execution (bfcache or navigation)');
                 // Continue without throwing - this is expected when page navigates
               } else {
                 logger.error('Error executing remaining steps:', error);
