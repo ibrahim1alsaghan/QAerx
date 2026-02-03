@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
-import { Plus, Play, FileText, Trash2, Globe } from 'lucide-react';
+import { Plus, Play, FileText, Trash2, Globe, Sparkles } from 'lucide-react';
 import { TestRepository } from '@/core/storage/repositories';
 import type { Test } from '@/types/test';
 import { clsx } from 'clsx';
 import toast from 'react-hot-toast';
+import { NLTestCreator } from '../ai/NLTestCreator';
 
 interface TestListProps {
   suiteId: string | null;
@@ -16,6 +17,7 @@ export function TestList({ suiteId, selectedTestId, onSelectTest }: TestListProp
   const [isCreating, setIsCreating] = useState(false);
   const [newTestName, setNewTestName] = useState('');
   const [newTestUrl, setNewTestUrl] = useState('');
+  const [showAICreator, setShowAICreator] = useState(false);
 
   useEffect(() => {
     if (suiteId) {
@@ -59,6 +61,19 @@ export function TestList({ suiteId, selectedTestId, onSelectTest }: TestListProp
     }
   };
 
+  const handleAITestCreated = async (testId: string) => {
+    // Refresh test list
+    if (suiteId) {
+      const updatedTests = await TestRepository.getBySuite(suiteId);
+      setTests(updatedTests);
+    } else {
+      const allTests = await TestRepository.getAll();
+      setTests(allTests);
+    }
+    // Select the new test
+    onSelectTest(testId);
+  };
+
   if (!suiteId) {
     return (
       <div className="text-center py-12 text-dark-500">
@@ -74,13 +89,23 @@ export function TestList({ suiteId, selectedTestId, onSelectTest }: TestListProp
         <h2 className="text-sm font-medium text-dark-400 uppercase tracking-wider">
           Tests ({tests.length})
         </h2>
-        <button
-          onClick={() => setIsCreating(true)}
-          className="btn btn-sm btn-ghost"
-        >
-          <Plus className="w-4 h-4" />
-          New Test
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => setShowAICreator(true)}
+            className="btn btn-sm btn-ghost text-purple-400 hover:bg-purple-500/10"
+            title="Create test with AI"
+          >
+            <Sparkles className="w-4 h-4" />
+            AI
+          </button>
+          <button
+            onClick={() => setIsCreating(true)}
+            className="btn btn-sm btn-ghost"
+          >
+            <Plus className="w-4 h-4" />
+            New
+          </button>
+        </div>
       </div>
 
       {isCreating && (
@@ -166,15 +191,33 @@ export function TestList({ suiteId, selectedTestId, onSelectTest }: TestListProp
           <div className="text-center py-8 text-dark-500">
             <FileText className="w-12 h-12 mx-auto mb-2 opacity-50" />
             <p>No tests in this suite</p>
-            <button
-              onClick={() => setIsCreating(true)}
-              className="btn btn-sm btn-primary mt-4"
-            >
-              Create your first test
-            </button>
+            <div className="flex flex-col gap-2 mt-4 items-center">
+              <button
+                onClick={() => setShowAICreator(true)}
+                className="btn btn-sm bg-gradient-to-r from-purple-500 to-pink-500 text-white hover:opacity-90"
+              >
+                <Sparkles className="w-4 h-4" />
+                Create with AI
+              </button>
+              <button
+                onClick={() => setIsCreating(true)}
+                className="btn btn-sm btn-ghost text-dark-400"
+              >
+                <Plus className="w-4 h-4" />
+                Create manually
+              </button>
+            </div>
           </div>
         )}
       </div>
+
+      {/* AI Test Creator Modal */}
+      <NLTestCreator
+        isOpen={showAICreator}
+        onClose={() => setShowAICreator(false)}
+        onTestCreated={handleAITestCreated}
+        suiteId={suiteId || undefined}
+      />
     </div>
   );
 }

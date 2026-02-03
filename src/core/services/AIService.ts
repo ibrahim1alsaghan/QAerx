@@ -1123,6 +1123,241 @@ Return ONLY valid JSON in this exact format:
     }
   }
 
+  // ==================== NATURAL LANGUAGE TEST GENERATION ====================
+
+  /**
+   * Generate a complete test from a natural language description
+   *
+   * Example: "Login with a@a.a and password 23, then go to task.com and create a task named 'first task'"
+   *
+   * @param description - Natural language description of the test
+   * @param options - Optional configuration
+   * @returns Generated test with name, steps, and data variables
+   */
+  async generateTestFromDescription(
+    description: string,
+    options: {
+      baseUrl?: string;
+      direction?: 'rtl' | 'ltr';
+      pageContext?: string;
+    } = {}
+  ): Promise<{
+    testName: string;
+    testDescription: string;
+    startUrl: string;
+    steps: UIStep[];
+    dataVariables: Record<string, string>;
+  }> {
+    if (!this.client) {
+      throw new Error('AIService not initialized');
+    }
+
+    const { baseUrl, direction = 'ltr', pageContext } = options;
+    const isRTL = direction === 'rtl';
+
+    // Detect if description is in Arabic
+    const isArabicDescription = /[\u0600-\u06FF]/.test(description);
+
+    const systemMessage = `You are an expert QA automation engineer. Convert natural language test descriptions into structured test steps.
+
+Your job is to:
+1. Parse the user's description to understand what they want to test
+2. Generate a logical sequence of test steps
+3. Extract data values mentioned and create variables for them
+4. Infer appropriate selectors based on common patterns
+5. Create a descriptive test name
+
+IMPORTANT RULES:
+- Generate ONLY the steps that are explicitly described or clearly implied
+- Use {{variableName}} syntax for data that should be parameterized
+- For selectors, use semantic patterns: [name="field"], [type="email"], [placeholder*="text"], button[type="submit"]
+- If a URL is mentioned (e.g., "task.com"), convert to full URL (https://task.com)
+- Keep steps minimal and focused - don't add unnecessary waits or assertions
+- ${isRTL || isArabicDescription ? 'Generate Arabic test names if the input is in Arabic' : 'Generate English test names'}`;
+
+    const pageContextSection = pageContext ? `
+CURRENT PAGE CONTEXT (use these selectors if relevant):
+${this.optimizeDOMSnapshot(pageContext)}
+` : '';
+
+    const userMessage = `Convert this test description into structured test steps:
+
+"${description}"
+
+${baseUrl ? `Base URL: ${baseUrl}` : ''}
+${pageContextSection}
+
+Generate a complete test with:
+1. A descriptive test name
+2. Brief test description
+3. Starting URL (infer from description or use base URL)
+4. Sequential test steps
+5. Data variables extracted from the description
+
+Return ONLY valid JSON in this exact format:
+{
+  "testName": "Descriptive Test Name",
+  "testDescription": "Brief description of what this test does",
+  "startUrl": "https://example.com/page",
+  "steps": [
+    {
+      "name": "Human-readable step name",
+      "actionType": "navigate|click|type|select|check",
+      "selector": "CSS selector (not needed for navigate)",
+      "text": "Text to type (only for type action, use {{variable}} for data)",
+      "url": "URL (only for navigate action)",
+      "value": "Value (only for select action)"
+    }
+  ],
+  "dataVariables": {
+    "variableName": "extracted value from description"
+  }
+}
+
+EXAMPLES of action parsing:
+- "login with email@test.com" → type action with text="{{email}}", dataVariables.email="email@test.com"
+- "click login button" → click action with selector="button[type='submit']" or "[data-testid='login']"
+- "go to task.com" → navigate action with url="https://task.com"
+- "create task named 'My Task'" → type action with text="{{taskName}}", dataVariables.taskName="My Task"`;
+
+    try {
+      const response = await this.makeRequest(async () => {
+        return await this.client!.chat.completions.create({
+          model: 'gpt-4o-mini',
+          messages: [
+            { role: 'system', content: systemMessage },
+            { role: 'user', content: userMessage },
+          ],
+          temperature: 0.4,
+          response_format: { type: 'json_object' },
+        });
+      });
+
+      const content = response.choices[0]?.message?.content;
+      if (!content) {
+        throw new Error('Empty response from AI');
+      }
+
+      const parsed = JSON.parse(content);
+
+      // Validate response structure
+      if (!parsed.testName || !parsed.steps || !Array.isArray(parsed.steps)) {
+        console.error('[AIService] Invalid NL test response:', parsed);
+        throw new Error('AI returned invalid test structure. Please try again.');
+      }
+
+      // Convert AI steps to UIStep format
+      const steps: UIStep[] = parsed.steps.map((step: any, index: number) => {
+        const uiStep: UIStep = {
+          id: crypto.randomUUID(),
+          type: 'ui',
+          order: index,
+          name: step.name || `Step ${index + 1}`,
+          enabled: true,
+          continueOnFailure: false,
+          action: this.createActionFromNLStep(step),
+          selectors: step.selector ? this.createSelectorsFromNLStep(step) : [],
+        };
+        return uiStep;
+      });
+
+      return {
+        testName: parsed.testName,
+        testDescription: parsed.testDescription || '',
+        startUrl: parsed.startUrl || baseUrl || '',
+        steps,
+        dataVariables: parsed.dataVariables || {},
+      };
+    } catch (error) {
+      this.handleError(error);
+      throw error;
+    }
+  }
+
+  /**
+   * Create action object from NL step suggestion
+   */
+  private createActionFromNLStep(step: any): any {
+    const actionType = step.actionType || 'click';
+
+    switch (actionType) {
+      case 'navigate':
+        return { type: 'navigate', url: step.url || '' };
+      case 'type':
+        return { type: 'type', text: step.text || '' };
+      case 'click':
+        return { type: 'click' };
+      case 'select':
+        return { type: 'select', value: step.value || '' };
+      case 'check':
+        return { type: 'check' };
+      case 'uncheck':
+        return { type: 'uncheck' };
+      case 'waitTime':
+        return { type: 'waitTime', duration: step.duration || 2000 };
+      case 'waitForElement':
+        return { type: 'waitForElement' };
+      default:
+        return { type: 'click' };
+    }
+  }
+
+  /**
+   * Create selector strategies from NL step
+   */
+  private createSelectorsFromNLStep(step: any): SelectorStrategy[] {
+    const selectors: SelectorStrategy[] = [];
+
+    // Primary selector from AI
+    if (step.selector) {
+      selectors.push({
+        type: 'css',
+        value: step.selector,
+        priority: 0,
+        confidence: 0.7,
+      });
+    }
+
+    // Add fallback selectors based on common patterns
+    const actionType = step.actionType || 'click';
+    const name = (step.name || '').toLowerCase();
+
+    if (actionType === 'type') {
+      // Add type-based fallbacks for input fields
+      if (name.includes('email')) {
+        selectors.push({ type: 'css', value: '[type="email"]', priority: 1, confidence: 0.6 });
+        selectors.push({ type: 'css', value: '[name*="email"]', priority: 2, confidence: 0.5 });
+      }
+      if (name.includes('password')) {
+        selectors.push({ type: 'css', value: '[type="password"]', priority: 1, confidence: 0.6 });
+        selectors.push({ type: 'css', value: '[name*="password"]', priority: 2, confidence: 0.5 });
+      }
+      if (name.includes('name') && !name.includes('user')) {
+        selectors.push({ type: 'css', value: '[name*="name"]', priority: 1, confidence: 0.5 });
+      }
+      if (name.includes('user')) {
+        selectors.push({ type: 'css', value: '[name*="user"]', priority: 1, confidence: 0.5 });
+      }
+    }
+
+    if (actionType === 'click') {
+      // Add click-based fallbacks for buttons
+      if (name.includes('login') || name.includes('sign in')) {
+        selectors.push({ type: 'css', value: 'button[type="submit"]', priority: 1, confidence: 0.6 });
+        selectors.push({ type: 'text', value: 'Login', priority: 2, confidence: 0.5 });
+        selectors.push({ type: 'text', value: 'Sign in', priority: 3, confidence: 0.5 });
+      }
+      if (name.includes('submit') || name.includes('save')) {
+        selectors.push({ type: 'css', value: 'button[type="submit"]', priority: 1, confidence: 0.6 });
+      }
+      if (name.includes('create')) {
+        selectors.push({ type: 'text', value: 'Create', priority: 1, confidence: 0.5 });
+      }
+    }
+
+    return selectors;
+  }
+
   // ==================== HELPER METHODS ====================
 
   /**
