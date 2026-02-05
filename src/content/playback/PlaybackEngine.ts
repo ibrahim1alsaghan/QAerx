@@ -66,6 +66,9 @@ export class PlaybackEngine {
         continue;
       }
 
+      // Wait for page stability before executing step
+      await this.waitForPageStability();
+
       onStepStart?.(step, i);
 
       const stepStart = Date.now();
@@ -80,6 +83,11 @@ export class PlaybackEngine {
       if (stepResult.status === 'failed' && !step.continueOnFailure) {
         result.status = 'failed';
         break;
+      }
+
+      // Small delay between steps for stability
+      if (i < steps.length - 1) {
+        await this.sleep(150);
       }
     }
 
@@ -408,6 +416,47 @@ export class PlaybackEngine {
         },
         { once: true }
       );
+    });
+  }
+
+  /**
+   * Wait for page to be stable before executing next step
+   * Checks for DOM readiness and waits for any pending mutations
+   */
+  private async waitForPageStability(): Promise<void> {
+    // Wait for document to be ready
+    if (document.readyState !== 'complete') {
+      await new Promise<void>((resolve) => {
+        if (document.readyState === 'complete') {
+          resolve();
+        } else {
+          window.addEventListener('load', () => resolve(), { once: true });
+        }
+      });
+    }
+
+    // Wait for DOM to settle (no mutations for 50ms)
+    await new Promise<void>((resolve) => {
+      let timeoutId: ReturnType<typeof setTimeout>;
+      const observer = new MutationObserver(() => {
+        clearTimeout(timeoutId);
+        timeoutId = setTimeout(() => {
+          observer.disconnect();
+          resolve();
+        }, 50);
+      });
+
+      observer.observe(document.body, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+      });
+
+      // Initial timeout in case no mutations occur
+      timeoutId = setTimeout(() => {
+        observer.disconnect();
+        resolve();
+      }, 100);
     });
   }
 

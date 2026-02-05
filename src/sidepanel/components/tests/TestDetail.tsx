@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Play, Save, Loader2, CheckCircle, XCircle, Database, ListChecks, Sparkles, FileDown, Code, History, MoreVertical, Trash2, Pencil, Check, X, Link } from 'lucide-react';
+import { Play, Save, Loader2, CheckCircle, XCircle, Database, ListChecks, Sparkles, FileDown, Code, History, MoreVertical, Trash2, Pencil, Check, X, Link, Square } from 'lucide-react';
 import { TestRepository, ResultRepository } from '@/core/storage/repositories';
 import type { TestRun } from '@/types/result';
 import { StepEditor } from '../steps/StepEditor';
@@ -30,6 +30,8 @@ export function TestDetail({ testId, onBack, onDelete }: TestDetailProps) {
   const [isAIGenerated, setIsAIGenerated] = useState(false);
   const [activeTab, setActiveTab] = useState<TabType>('steps');
   const [isRunning, setIsRunning] = useState(false);
+  const [isStopping, setIsStopping] = useState(false);
+  const shouldStopRef = useRef(false);
   const [showMoreMenu, setShowMoreMenu] = useState(false);
   const moreMenuRef = useRef<HTMLDivElement>(null);
   const [runProgress, setRunProgress] = useState<{
@@ -528,11 +530,32 @@ export function TestDetail({ testId, onBack, onDelete }: TestDetailProps) {
     }
   };
 
+  const handleStop = async () => {
+    setIsStopping(true);
+    shouldStopRef.current = true;
+
+    // Send stop command to content script
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (tab?.id) {
+        await chrome.tabs.sendMessage(tab.id, { type: 'playback:stop' });
+      }
+    } catch (error) {
+      logger.warn('Failed to send stop command:', error);
+    }
+
+    toast.success('Stopping test...');
+  };
+
   const handleRun = async () => {
     if (steps.length === 0) {
       toast.error('Add at least one step before running');
       return;
     }
+
+    // Reset stop flag
+    shouldStopRef.current = false;
+    setIsStopping(false);
 
     setIsRunning(true);
     setRunProgress({
@@ -650,6 +673,12 @@ export function TestDetail({ testId, onBack, onDelete }: TestDetailProps) {
 
       // Run for each data set
       for (let dataSetIndex = 0; dataSetIndex < dataSets.length; dataSetIndex++) {
+        // Check if user requested stop
+        if (shouldStopRef.current) {
+          toast.success('Test stopped by user');
+          break;
+        }
+
         const variables = dataSets[dataSetIndex];
         setRunProgress((prev) => prev && { ...prev, currentDataSet: dataSetIndex });
 
@@ -681,84 +710,27 @@ export function TestDetail({ testId, onBack, onDelete }: TestDetailProps) {
         chrome.runtime.onMessage.addListener(progressListener);
 
         try {
-          // Process steps, handling navigation separately
-          let currentSteps: UIStep[] = [];
-
+          // Execute steps ONE AT A TIME to properly handle navigation between steps
           for (let i = 0; i < steps.length; i++) {
+            // Check if user requested stop
+            if (shouldStopRef.current) {
+              break;
+            }
+
             const step = steps[i];
 
-            // If this is a navigate or waitTime action, handle it from sidepanel (not content script)
+            // Mark step as in progress
+            setRunProgress((prev) => {
+              if (!prev) return null;
+              return { ...prev, currentStepId: step.id, currentStep: i };
+            });
+
+            const startTime = Date.now();
+
+            // Handle navigate and waitTime from sidepanel (not content script)
             if (step.action.type === 'navigate' || step.action.type === 'waitTime') {
-              // First, execute any accumulated steps before this navigation
-              if (currentSteps.length > 0) {
-                try {
-                  const response = await chrome.tabs.sendMessage(tab.id, {
-                    type: 'playback:execute',
-                    steps: currentSteps,
-                    variables,
-                    timeout: 30000,
-                  });
-
-                  // Handle page navigation during execution (message channel closed)
-                  if (response?.navigated === true) {
-                    logger.warn('Page navigated during step execution, some steps may not have completed');
-                    // Continue without error - navigation is expected in some test flows
-                  } else if (response?.result?.stepResults) {
-                    // Validate each step result with AI
-                    for (const stepResult of response.result.stepResults) {
-                      const step = currentSteps.find(s => s.id === stepResult.stepId);
-                      if (step) {
-                        const validatedResult = await validateStepResult(
-                          stepResult,
-                          step,
-                          dataSetIndex,
-                          variables,
-                          tab.url || ''
-                        );
-                        collectedResults.push(validatedResult);
-                        setRunProgress((prev) => {
-                          if (!prev) return null;
-                          return {
-                            ...prev,
-                            results: [...prev.results, validatedResult],
-                          };
-                        });
-                      }
-                    }
-                  }
-                } catch (error) {
-                  // Check if this is a navigation-related error (bfcache, page navigation, etc.)
-                  const errorMsg = (error instanceof Error ? error.message : String(error)).toLowerCase();
-                  const isNavigationError =
-                    errorMsg.includes('message channel closed') ||
-                    errorMsg.includes('receiving end does not exist') ||
-                    errorMsg.includes('context invalidated') ||
-                    errorMsg.includes('back/forward cache') ||
-                    errorMsg.includes('bfcache') ||
-                    errorMsg.includes('extension port');
-
-                  if (isNavigationError) {
-                    logger.warn('Page navigation detected during step execution (bfcache or navigation)');
-                    // Continue without throwing - this is expected when page navigates
-                  } else {
-                    logger.error('Error executing steps before navigation:', error);
-                    throw new Error(`Step execution failed: ${error instanceof Error ? error.message : String(error)}`);
-                  }
-                }
-                currentSteps = [];
-              }
-
-              // Mark step as in progress
-              setRunProgress((prev) => {
-                if (!prev) return null;
-                return { ...prev, currentStepId: step.id, currentStep: i };
-              });
-
               try {
-                const startTime = Date.now();
-
                 if (step.action.type === 'navigate') {
-                  // Perform navigation from sidepanel
                   const navAction = step.action as { url: string };
                   let url = navAction.url;
                   Object.entries(variables).forEach(([key, value]) => {
@@ -767,55 +739,39 @@ export function TestDetail({ testId, onBack, onDelete }: TestDetailProps) {
 
                   await chrome.tabs.update(tab.id, { url });
 
-                  // Wait for page load with timeout
+                  // Wait for page load
                   await new Promise<void>((resolve) => {
                     let loaded = false;
                     const loadTimeout = setTimeout(() => {
-                      if (!loaded) {
-                        loaded = true;
-                        resolve(); // Don't fail, just continue
-                      }
-                    }, 8000); // Increased timeout to 8 seconds
+                      if (!loaded) { loaded = true; resolve(); }
+                    }, 8000);
 
                     const listener = (tabId: number, info: chrome.tabs.TabChangeInfo) => {
                       if (tabId === tab.id && info.status === 'complete' && !loaded) {
                         loaded = true;
                         clearTimeout(loadTimeout);
                         chrome.tabs.onUpdated.removeListener(listener);
-                        setTimeout(() => resolve(), 500); // Small buffer after load
+                        setTimeout(() => resolve(), 500);
                       }
                     };
-
                     chrome.tabs.onUpdated.addListener(listener);
-
-                    // Cleanup listener after timeout
-                    setTimeout(() => {
-                      chrome.tabs.onUpdated.removeListener(listener);
-                    }, 8500);
+                    setTimeout(() => chrome.tabs.onUpdated.removeListener(listener), 8500);
                   });
 
                   await ensureContentScript();
                 } else if (step.action.type === 'waitTime') {
-                  // Perform wait from sidepanel (not content script to avoid bfcache issues)
                   const waitAction = step.action as { duration: number };
                   await new Promise((resolve) => setTimeout(resolve, waitAction.duration));
                 }
 
                 const duration = Date.now() - startTime;
-
-                // Mark step as passed
                 const passedResult = { dataSetIndex, stepId: step.id, status: 'passed' as const, duration };
                 collectedResults.push(passedResult);
                 setRunProgress((prev) => {
                   if (!prev) return null;
-                  return {
-                    ...prev,
-                    currentStepId: null,
-                    results: [...prev.results, passedResult],
-                  };
+                  return { ...prev, currentStepId: null, results: [...prev.results, passedResult] };
                 });
               } catch (error) {
-                // Mark step as failed
                 const failedResult = {
                   dataSetIndex,
                   stepId: step.id,
@@ -826,39 +782,27 @@ export function TestDetail({ testId, onBack, onDelete }: TestDetailProps) {
                 collectedResults.push(failedResult);
                 setRunProgress((prev) => {
                   if (!prev) return null;
-                  return {
-                    ...prev,
-                    currentStepId: null,
-                    results: [...prev.results, failedResult],
-                  };
+                  return { ...prev, currentStepId: null, results: [...prev.results, failedResult] };
                 });
                 throw error;
               }
             } else {
-              // Accumulate non-navigate steps to execute together
-              currentSteps.push(step);
-            }
-          }
+              // Execute single step in content script
+              let stepExecuted = false;
+              let retryCount = 0;
+              const maxRetries = 2;
 
-          // Execute any remaining non-navigate steps
-          if (currentSteps.length > 0) {
-            try {
-              const response = await chrome.tabs.sendMessage(tab.id, {
-                type: 'playback:execute',
-                steps: currentSteps,
-                variables,
-                timeout: 30000,
-              });
+              while (!stepExecuted && retryCount <= maxRetries) {
+                try {
+                  const response = await chrome.tabs.sendMessage(tab.id, {
+                    type: 'playback:execute',
+                    steps: [step], // Execute ONE step at a time
+                    variables,
+                    timeout: 30000,
+                  });
 
-              // Handle page navigation during execution (message channel closed)
-              if (response?.navigated === true) {
-                logger.warn('Page navigated during remaining step execution');
-                // Continue without error - navigation may be expected
-              } else if (response?.result?.stepResults) {
-                // Validate each step result with AI
-                for (const stepResult of response.result.stepResults) {
-                  const step = currentSteps.find(s => s.id === stepResult.stepId);
-                  if (step) {
+                  if (response?.result?.stepResults?.[0]) {
+                    const stepResult = response.result.stepResults[0];
                     const validatedResult = await validateStepResult(
                       stepResult,
                       step,
@@ -869,32 +813,89 @@ export function TestDetail({ testId, onBack, onDelete }: TestDetailProps) {
                     collectedResults.push(validatedResult);
                     setRunProgress((prev) => {
                       if (!prev) return null;
-                      return {
-                        ...prev,
-                        results: [...prev.results, validatedResult],
-                      };
+                      return { ...prev, currentStepId: null, results: [...prev.results, validatedResult] };
                     });
+                    stepExecuted = true;
+
+                    // If step failed, don't continue unless continueOnFailure is set
+                    if (validatedResult.status === 'failed' && !step.continueOnFailure) {
+                      throw new Error(validatedResult.error || 'Step failed');
+                    }
+                  } else {
+                    // No result returned - step may have succeeded but page navigated
+                    logger.warn(`No result for step ${step.id}, assuming success after navigation`);
+                    const duration = Date.now() - startTime;
+                    const passedResult = { dataSetIndex, stepId: step.id, status: 'passed' as const, duration };
+                    collectedResults.push(passedResult);
+                    setRunProgress((prev) => {
+                      if (!prev) return null;
+                      return { ...prev, currentStepId: null, results: [...prev.results, passedResult] };
+                    });
+                    stepExecuted = true;
+                  }
+                } catch (error) {
+                  const errorMsg = (error instanceof Error ? error.message : String(error)).toLowerCase();
+                  const isNavigationError =
+                    errorMsg.includes('message channel closed') ||
+                    errorMsg.includes('receiving end does not exist') ||
+                    errorMsg.includes('context invalidated') ||
+                    errorMsg.includes('bfcache') ||
+                    errorMsg.includes('extension port');
+
+                  if (isNavigationError && retryCount < maxRetries) {
+                    // Page navigated - wait for it to load and retry
+                    logger.info(`Navigation detected after step ${i + 1}, waiting for page load...`);
+                    await new Promise((r) => setTimeout(r, 2000));
+                    await ensureContentScript();
+                    retryCount++;
+
+                    // Mark this step as passed (click likely succeeded and caused navigation)
+                    if (step.action.type === 'click' || step.action.type === 'dblclick') {
+                      const duration = Date.now() - startTime;
+                      const passedResult = { dataSetIndex, stepId: step.id, status: 'passed' as const, duration };
+                      collectedResults.push(passedResult);
+                      setRunProgress((prev) => {
+                        if (!prev) return null;
+                        return { ...prev, currentStepId: null, results: [...prev.results, passedResult] };
+                      });
+                      stepExecuted = true;
+                    }
+                  } else if (!isNavigationError) {
+                    // Real error - mark step as failed
+                    const failedResult = {
+                      dataSetIndex,
+                      stepId: step.id,
+                      status: 'failed' as const,
+                      error: error instanceof Error ? error.message : String(error),
+                      duration: Date.now() - startTime
+                    };
+                    collectedResults.push(failedResult);
+                    setRunProgress((prev) => {
+                      if (!prev) return null;
+                      return { ...prev, currentStepId: null, results: [...prev.results, failedResult] };
+                    });
+                    if (!step.continueOnFailure) {
+                      throw error;
+                    }
+                    stepExecuted = true;
+                  } else {
+                    // Navigation error but max retries reached - mark as passed
+                    const duration = Date.now() - startTime;
+                    const passedResult = { dataSetIndex, stepId: step.id, status: 'passed' as const, duration };
+                    collectedResults.push(passedResult);
+                    setRunProgress((prev) => {
+                      if (!prev) return null;
+                      return { ...prev, currentStepId: null, results: [...prev.results, passedResult] };
+                    });
+                    stepExecuted = true;
                   }
                 }
               }
-            } catch (error) {
-              // Check if this is a navigation-related error (bfcache, page navigation, etc.)
-              const errorMsg = (error instanceof Error ? error.message : String(error)).toLowerCase();
-              const isNavigationError =
-                errorMsg.includes('message channel closed') ||
-                errorMsg.includes('receiving end does not exist') ||
-                errorMsg.includes('context invalidated') ||
-                errorMsg.includes('back/forward cache') ||
-                errorMsg.includes('bfcache') ||
-                errorMsg.includes('extension port');
+            }
 
-              if (isNavigationError) {
-                logger.warn('Page navigation detected during remaining step execution (bfcache or navigation)');
-                // Continue without throwing - this is expected when page navigates
-              } else {
-                logger.error('Error executing remaining steps:', error);
-                throw new Error(`Step execution failed: ${error instanceof Error ? error.message : String(error)}`);
-              }
+            // Small delay between steps
+            if (i < steps.length - 1) {
+              await new Promise((r) => setTimeout(r, 300));
             }
           }
         } finally {
@@ -937,6 +938,7 @@ export function TestDetail({ testId, onBack, onDelete }: TestDetailProps) {
       toast.error('Test execution failed: ' + (error instanceof Error ? error.message : 'Unknown error'));
     } finally {
       setIsRunning(false);
+      setIsStopping(false);
     }
   };
 
@@ -1129,24 +1131,34 @@ export function TestDetail({ testId, onBack, onDelete }: TestDetailProps) {
             </button>
           )}
 
-          {/* Primary action: Run Test */}
-          <button
-            onClick={handleRun}
-            disabled={isRunning}
-            className="btn btn-sm btn-primary"
-          >
-            {isRunning ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                Running...
-              </>
-            ) : (
-              <>
-                <Play className="w-4 h-4" />
-                Run
-              </>
-            )}
-          </button>
+          {/* Primary action: Run/Stop Test */}
+          {isRunning ? (
+            <button
+              onClick={handleStop}
+              disabled={isStopping}
+              className="btn btn-sm bg-red-600 hover:bg-red-700 text-white"
+            >
+              {isStopping ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Stopping...
+                </>
+              ) : (
+                <>
+                  <Square className="w-4 h-4" />
+                  Stop
+                </>
+              )}
+            </button>
+          ) : (
+            <button
+              onClick={handleRun}
+              className="btn btn-sm btn-primary"
+            >
+              <Play className="w-4 h-4" />
+              Run
+            </button>
+          )}
         </div>
       </div>
 

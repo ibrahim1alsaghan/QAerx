@@ -6,8 +6,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build && node scripts/create-icons.js && cp manifest.json dist/",
-    "build:quick": "vite build && node scripts/create-icons.js && cp manifest.json dist/",
+    "build": "tsc && vite build && node scripts/create-icons.js && node -e \"require('fs').copyFileSync('manifest.json','dist/manifest.json')\"",
+    "build:quick": "vite build && node scripts/create-icons.js && node -e \"require('fs').copyFileSync('manifest.json','dist/manifest.json')\"",
     "preview": "vite preview",
     "lint": "eslint src --ext ts,tsx"
   },
